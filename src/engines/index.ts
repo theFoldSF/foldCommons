@@ -2,6 +2,7 @@
 // Each engine renders deterministic SVG from (seed, params, colors): the same
 // seed always reproduces the same mark, so compositions are shareable.
 
+import mesh from "./foldMesh.js";
 import fold from "./foldedSurface.js";
 import flow from "./flowField.js";
 import graph from "./graph.js";
@@ -57,6 +58,7 @@ const seededWrap: Engine = {
 };
 
 export const ENGINES: Engine[] = [
+  mesh as Engine,
   fold as Engine,
   quilt as Engine,
   graph as Engine,

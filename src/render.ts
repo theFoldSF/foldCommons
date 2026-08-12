@@ -13,7 +13,7 @@ const esc = (s: string) =>
 
 // Approximate glyph width as a fraction of font size, per role — good enough
 // for wrapping; SVG <text> has no layout engine.
-const CHAR_W: Record<TypeRole, number> = { display: 0.54, body: 0.5, label: 0.64 };
+const CHAR_W: Record<TypeRole, number> = { display: 0.56, heading: 0.55, body: 0.52, mono: 0.62 };
 
 function wrap(text: string, zone: TextZone): string[] {
   const perLine = Math.max(4, Math.floor(zone.w / (zone.size * (CHAR_W[zone.role] + (zone.tracking ?? 0)))));
@@ -99,7 +99,7 @@ function wordmarkSvg(doc: Doc, ink: string): string {
 function diagramSvg(doc: Doc, W: number, H: number, ink: string, ground: string): string {
   const d = doc.diagram;
   if (!d.nodes.length) return "";
-  const face = TYPE_RULES.byRole("label")[0];
+  const face = TYPE_RULES.byRole("mono")[0];
   const boxH = 88;
   const gap = 72;
   const pad = 34;
@@ -179,9 +179,7 @@ function stickersSvg(doc: Doc, W: number, H: number): string {
 export function renderDoc(doc: Doc, opts: { fontCss?: string } = {}): string {
   const t = docTemplate(doc);
   const reg = REGISTERS[doc.register];
-  const season = docSeason(doc);
-  // Interior register breathes with the season; exterior stays black/gold.
-  const ground = doc.register === "interior" ? season.ground : reg.ground;
+  const ground = reg.ground;
   const ink = reg.ink;
   const W = t.w, H = t.h;
   const style = opts.fontCss ? `<style>${opts.fontCss}</style>` : "";

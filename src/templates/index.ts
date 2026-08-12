@@ -40,10 +40,10 @@ export interface Template {
 }
 
 const flyerZones = (W: number, H: number, s: number): TextZone[] => [
-  { id: "kicker", label: "Kicker", role: "label", x: W / 2, y: H * 0.1, w: W * 0.8, size: 22 * s, align: "middle", default: "THE FOLD PRESENTS", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
+  { id: "kicker", label: "Kicker", role: "mono", x: W / 2, y: H * 0.1, w: W * 0.8, size: 22 * s, align: "middle", default: "THE FOLD PRESENTS", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
   { id: "title", label: "Title", role: "display", x: W / 2, y: H * 0.34, w: W * 0.86, size: 92 * s, align: "middle", default: "Salon Night", lines: 3, colorable: true },
   { id: "detail", label: "Details", role: "body", x: W / 2, y: H * 0.62, w: W * 0.72, size: 26 * s, align: "middle", default: "Readings, music, and long conversation.\nAll are welcome.", lines: 4 },
-  { id: "when", label: "When / where", role: "label", x: W / 2, y: H * 0.87, w: W * 0.8, size: 24 * s, align: "middle", default: "FRI SEPT 12 · 7PM · THE FOLD", uppercase: true, tracking: 0.14, lines: 2, colorable: true },
+  { id: "when", label: "When / where", role: "mono", x: W / 2, y: H * 0.87, w: W * 0.8, size: 24 * s, align: "middle", default: "FRI SEPT 12 · 7PM · THE FOLD", uppercase: true, tracking: 0.14, lines: 2, colorable: true },
 ];
 
 export const TEMPLATES: Template[] = [
@@ -54,7 +54,7 @@ export const TEMPLATES: Template[] = [
     kind: "poster",
     w: 850,
     h: 1100,
-    register: "interior",
+    register: "paper",
     allowRegisterSwitch: true,
     zones: flyerZones(850, 1100, 1),
     motifSlot: { x: 85, y: 462, w: 680, h: 187 },
@@ -68,7 +68,7 @@ export const TEMPLATES: Template[] = [
     kind: "poster",
     w: 1080,
     h: 1350,
-    register: "interior",
+    register: "paper",
     allowRegisterSwitch: true,
     zones: flyerZones(1080, 1350, 1.28),
     motifSlot: { x: 108, y: 567, w: 864, h: 230 },
@@ -82,13 +82,13 @@ export const TEMPLATES: Template[] = [
     kind: "story",
     w: 1080,
     h: 1920,
-    register: "interior",
+    register: "paper",
     allowRegisterSwitch: true,
     zones: [
-      { id: "kicker", label: "Kicker", role: "label", x: 540, y: 340, w: 800, size: 30, align: "middle", default: "THIS WEEK AT THE FOLD", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
+      { id: "kicker", label: "Kicker", role: "mono", x: 540, y: 340, w: 800, size: 30, align: "middle", default: "THIS WEEK AT THE FOLD", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
       { id: "title", label: "Title", role: "display", x: 540, y: 700, w: 900, size: 120, align: "middle", default: "Open Studio", lines: 3, colorable: true },
       { id: "detail", label: "Details", role: "body", x: 540, y: 1180, w: 760, size: 38, align: "middle", default: "Bring the thing you're making.", lines: 3 },
-      { id: "when", label: "When", role: "label", x: 540, y: 1560, w: 800, size: 32, align: "middle", default: "WEDNESDAY · 6–10PM", uppercase: true, tracking: 0.16, lines: 1, colorable: true },
+      { id: "when", label: "When", role: "mono", x: 540, y: 1560, w: 800, size: 32, align: "middle", default: "WEDNESDAY · 6–10PM", uppercase: true, tracking: 0.16, lines: 1, colorable: true },
     ],
     motifSlot: "backdrop",
     line: { y: 0.45 },
@@ -101,10 +101,10 @@ export const TEMPLATES: Template[] = [
     kind: "post",
     w: 1080,
     h: 1080,
-    register: "interior",
+    register: "paper",
     allowRegisterSwitch: true,
     zones: [
-      { id: "kicker", label: "Kicker", role: "label", x: 100, y: 140, w: 880, size: 28, align: "start", default: "THE FOLD", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
+      { id: "kicker", label: "Kicker", role: "mono", x: 100, y: 140, w: 880, size: 28, align: "start", default: "THE FOLD", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
       { id: "title", label: "Title", role: "display", x: 100, y: 320, w: 880, size: 96, align: "start", default: "A gathering place", lines: 3, colorable: true },
       { id: "detail", label: "Details", role: "body", x: 100, y: 880, w: 700, size: 34, align: "start", default: "Third space · gallery · cafe", lines: 2 },
     ],
@@ -119,7 +119,7 @@ export const TEMPLATES: Template[] = [
     kind: "diagram",
     w: 1600,
     h: 1000,
-    register: "interior",
+    register: "paper",
     allowRegisterSwitch: true,
     zones: [
       { id: "title", label: "Title", role: "display", x: 80, y: 96, w: 1200, size: 54, align: "start", default: "How it works", lines: 1, colorable: true },
@@ -134,7 +134,7 @@ export const TEMPLATES: Template[] = [
     kind: "stickers",
     w: 1000,
     h: 1000,
-    register: "interior",
+    register: "paper",
     allowRegisterSwitch: true,
     zones: [],
     wordmark: { x: 500, y: 964, size: 20, align: "middle" },

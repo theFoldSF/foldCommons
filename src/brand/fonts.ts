@@ -4,10 +4,19 @@
 
 import { FACES } from "./tokens";
 
-const css2Url = () =>
-  "https://fonts.googleapis.com/css2?" +
-  FACES.map((f) => `family=${f.name.replace(/ /g, "+")}:wght@${f.weight}`).join("&") +
-  "&display=swap";
+// Group faces by family so multi-weight families make one valid css2 query.
+function css2Url(): string {
+  const byFamily = new Map<string, Set<number>>();
+  for (const f of FACES) {
+    if (!byFamily.has(f.name)) byFamily.set(f.name, new Set());
+    byFamily.get(f.name)!.add(Math.round(f.weight));
+  }
+  const parts = [...byFamily.entries()].map(
+    ([name, weights]) =>
+      `family=${name.replace(/ /g, "+")}:wght@${[...weights].sort((a, b) => a - b).join(";")}`
+  );
+  return `https://fonts.googleapis.com/css2?${parts.join("&")}&display=swap`;
+}
 
 export function loadFonts() {
   const link = document.createElement("link");
@@ -30,12 +39,16 @@ export async function getEmbeddedFontCss(): Promise<string> {
   await Promise.all(
     urls.map(async (u) => {
       const buf = await (await fetch(u)).arrayBuffer();
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-      out = out.replaceAll(u, `data:font/woff2;base64,${b64}`);
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000)
+        bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      out = out.replaceAll(u, `data:font/woff2;base64,${btoa(bin)}`);
     })
   );
   embeddedCss = out;
   return out;
 }
 
-export const fontFamilyCss = (name: string) => `'${name}', serif`;
+export const fontFamilyCss = (name: string) =>
+  name === "Fira Code" ? `'Fira Code', monospace` : name === "Fraunces" ? `'Fraunces', serif` : `'${name}', sans-serif`;

@@ -54,7 +54,7 @@ export function newDoc(templateId: string): Doc {
     fields,
     fieldAccents: {},
     motif: t.motifSlot
-      ? { engine: engine.id, seed: 1234, params: defaultParams(engine), accents: [0, 1] }
+      ? { engine: engine.id, seed: 1234, params: defaultParams(engine), accents: [4, 0] }
       : null,
     lineOn: !!t.line,
     line: {
@@ -118,8 +118,10 @@ export function sanitize(doc: Doc): Doc {
   doc.line.amp = Math.min(amplitude.max, Math.max(amplitude.min, doc.line.amp));
   doc.line.periods = Math.min(periods.max, Math.max(periods.min, doc.line.periods));
   doc.line.sw = Math.min(strokeWidth.max, Math.max(strokeWidth.min, doc.line.sw));
-  doc.stickers.ids = doc.stickers.ids.filter((id) => MARKS.some((m) => m.id === id));
-  if (!doc.stickers.ids.length) doc.stickers.ids = [MARKS[0].id];
+  if (MARKS.length) {
+    doc.stickers.ids = doc.stickers.ids.filter((id) => MARKS.some((m) => m.id === id));
+    if (!doc.stickers.ids.length) doc.stickers.ids = [MARKS[0].id];
+  }
   return doc;
 }
 

@@ -4,9 +4,9 @@ import "./styles.css";
 import {
   AVOID,
   BRAND_SENTENCE,
+  CANON_COLORS,
   LINE_MOTIF,
   OPEN_QUESTIONS,
-  PALETTES,
   REGISTERS,
   SEASONS,
   TYPE_RULES,
@@ -15,7 +15,7 @@ import {
 } from "./brand/tokens";
 import { loadFonts } from "./brand/fonts";
 import { ENGINES, defaultParams, engineById } from "./engines/index";
-import { MARKS } from "./marks/index";
+import { MARKS, loadMarks } from "./marks/index";
 import { TEMPLATES } from "./templates/index";
 import { renderDoc } from "./render";
 import {
@@ -25,6 +25,7 @@ import {
   loadGallery,
   newDoc,
   removeFromGallery,
+  sanitize,
   saveToGallery,
   type Doc,
 } from "./state";
@@ -113,25 +114,23 @@ function buildLeft() {
   });
   leftPanel.appendChild(seg);
 
-  if (doc.register === "interior") {
-    leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
-    const chips = h(`<div class="chips"></div>`);
-    for (const s of SEASONS) {
-      const c = h(
-        `<button class="chip ${doc.season === s.key ? "active" : ""}" style="background:${s.accent}" title="${s.label}"></button>`
-      );
-      c.onclick = () => {
-        doc.season = s.key;
-        buildLeft();
-        renderCanvas();
-      };
-      chips.appendChild(c);
-    }
-    leftPanel.appendChild(chips);
-    leftPanel.appendChild(
-      h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
+  leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
+  const chips = h(`<div class="chips"></div>`);
+  for (const s of SEASONS) {
+    const c = h(
+      `<button class="chip ${doc.season === s.key ? "active" : ""}" style="background:${s.accent}" title="${s.label}"></button>`
     );
+    c.onclick = () => {
+      doc.season = s.key;
+      buildLeft();
+      renderCanvas();
+    };
+    chips.appendChild(c);
   }
+  leftPanel.appendChild(chips);
+  leftPanel.appendChild(
+    h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
+  );
 
   leftPanel.appendChild(
     h(`<div class="note">Everything here draws from the canon — palettes, faces, and motifs
@@ -442,46 +441,46 @@ function buildGallery() {
 // --- canon (guidelines) ------------------------------------------------------
 
 function buildCanon() {
-  const sw = (name: string, hex: string) =>
-    `<div class="swatch"><div class="c" style="background:${hex}"></div><div class="l">${name}<br>${hex}</div></div>`;
+  const sw = (name: string, hex: string, pct?: number) =>
+    `<div class="swatch"><div class="c" style="background:${hex}"></div><div class="l">${name}<br><span class="mono">${hex}${pct ? ` · ${pct}%` : ""}</span></div></div>`;
   $("#canonView").innerHTML = `
   <div class="canon-inner">
     <h1>The Canon</h1>
     <p class="lede">${BRAND_SENTENCE}</p>
     <p>This page is the living draft of The Fold's brand guidelines — the rules this
-    tool enforces. It is honest about what's decided and what isn't. The brand belongs
-    to the community the way a song belongs to a band: anyone can play it, and it still
-    sounds like us.</p>
+    tool enforces, distilled from the fold-brand Figma deck. It is honest about what's
+    decided and what isn't. The brand belongs to the community the way a song belongs
+    to a band: anyone can play it, and it still sounds like us.</p>
+
+    <h2>Color</h2>
+    <p>The deck's color system, with its usage percentages: mostly warm paper, one
+    tenth ink, and four candy accents used sparingly.</p>
+    <div class="swatch-row">${CANON_COLORS.map((s) => sw(s.name, s.hex, s.pct)).join("")}</div>
 
     <h2>Two registers</h2>
-    <p><strong>${REGISTERS.exterior.label}.</strong> ${REGISTERS.exterior.blurb}</p>
-    <div class="swatch-row">${[sw("Sign black", REGISTERS.exterior.ground), ...REGISTERS.exterior.accents.map((a) => sw("Gold register", a))].join("")}</div>
-    <p><strong>${REGISTERS.interior.label}.</strong> ${REGISTERS.interior.blurb}</p>
-    <div class="swatch-row">${[sw("Cream ground", REGISTERS.interior.ground), ...REGISTERS.interior.accents.map((a) => sw("Accent", a))].join("")}</div>
-
-    <h2>Palettes</h2>
-    <p>${PALETTES.v1.label} is the working preferred palette; ${PALETTES.v2.label} exists for contrast and accessibility.</p>
-    <div class="swatch-row">${PALETTES.v1.swatches.map((s) => sw(s.name, s.hex)).join("")}</div>
-    <div class="swatch-row">${PALETTES.v2.swatches.map((s) => sw(s.name, s.hex)).join("")}</div>
+    <p><strong>${REGISTERS.paper.label}.</strong> ${REGISTERS.paper.blurb}</p>
+    <div class="swatch-row">${[sw("Ground", REGISTERS.paper.ground), sw("Ink", REGISTERS.paper.ink), ...REGISTERS.paper.accents.map((a) => sw("Accent", a))].join("")}</div>
+    <p><strong>${REGISTERS.blueprint.label}.</strong> ${REGISTERS.blueprint.blurb}</p>
+    <div class="swatch-row">${[sw("Ground", REGISTERS.blueprint.ground), sw("Ink", REGISTERS.blueprint.ink), ...REGISTERS.blueprint.accents.map((a) => sw("Accent", a))].join("")}</div>
 
     <h2>The Line</h2>
-    <p>A sine wave — precise, generative, alive. It reads as time, fabric, clothesline,
-    season. Structure is constant; color is variable; time is marked by hue. Each season
-    tints the Line:</p>
+    <p>${LINE_MOTIF.blurb} Each season tints the Line:</p>
     <div class="swatch-row">${SEASONS.map((s) => sw(s.label, s.accent)).join("")}</div>
 
     <h2>Typography</h2>
     ${FACES.map(
       (f) =>
-        `<p class="face-demo" style="font-family:'${f.name}',serif;font-weight:${f.weight}">${f.name} — The Fold, a gathering place <span class="pill">${f.role}</span></p>`
+        `<p class="face-demo" style="font-family:${f.name === "Fira Code" ? "'Fira Code',monospace" : f.name === "Fraunces" ? "'Fraunces',serif" : `'${f.name}',sans-serif`};font-weight:${f.weight}">${f.name} ${f.weight} — the Fold, a gathering place <span class="pill">${f.role}${f.standInFor ? ` · stand-in for ${f.standInFor}` : ""}</span></p>`
     ).join("")}
-    <p>The wordmark is ${TYPE_RULES.wordmark.text} in ${TYPE_RULES.wordmark.face}, all caps,
-    tracked wide — it carries the weight of the sign. All faces are open-licensed (OFL) so
-    everything this tool makes is shippable. The final brand typeface is an open decision.</p>
+    <p>The deck's type system is Denim (semi-bold and regular) with Fira Code for
+    numerals, urls, dates, and times, plus a chunky soft display face for the biggest
+    headlines. Fira Code is open-licensed and used verbatim; the others ship here as
+    OFL stand-ins until licensing is decided. The wordmark is
+    “${TYPE_RULES.wordmark.text}” — sentence case, semi-bold.</p>
 
     <h2>The marks</h2>
-    <p>Community marks — hand-souled, single-weight, recolorable within the canon.
-    Finished redraws of the Brand Jam sketches join this family.</p>
+    <p>The wireframe fold meshes from the lockups — plus, soon, hand-souled redraws
+    of the Brand Jam sketches. All recolorable within the canon.</p>
     <div class="mark-row">${MARKS.map(
       (m) =>
         `<div class="mark-cell"><div class="m"><svg viewBox="${m.viewBox}">${m.svg}</svg></div>
@@ -520,3 +519,12 @@ function buildAll() {
 }
 
 buildAll();
+
+// The mesh marks load async from public/marks/ — refresh whatever is on screen
+// once they land.
+loadMarks(() => {
+  sanitize(doc);
+  buildAll();
+  if ($("#canonView").classList.contains("active")) buildCanon();
+  if ($("#galleryView").classList.contains("active")) buildGallery();
+});
