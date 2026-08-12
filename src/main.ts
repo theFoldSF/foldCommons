@@ -1,0 +1,522 @@
+// main.ts — Fold Commons app shell: canvas + guarded panels + gallery + canon.
+
+import "./styles.css";
+import {
+  AVOID,
+  BRAND_SENTENCE,
+  LINE_MOTIF,
+  OPEN_QUESTIONS,
+  PALETTES,
+  REGISTERS,
+  SEASONS,
+  TYPE_RULES,
+  FACES,
+  type RegisterKey,
+} from "./brand/tokens";
+import { loadFonts } from "./brand/fonts";
+import { ENGINES, defaultParams, engineById } from "./engines/index";
+import { MARKS } from "./marks/index";
+import { TEMPLATES } from "./templates/index";
+import { renderDoc } from "./render";
+import {
+  decodeDoc,
+  docTemplate,
+  encodeDoc,
+  loadGallery,
+  newDoc,
+  removeFromGallery,
+  saveToGallery,
+  type Doc,
+} from "./state";
+import { exportPng, exportSvg } from "./export";
+
+loadFonts();
+
+// --- state -------------------------------------------------------------------
+
+let doc: Doc = (() => {
+  const fromHash = location.hash.startsWith("#d=") ? decodeDoc(location.hash.slice(3)) : null;
+  return fromHash ?? newDoc("flyer-digital");
+})();
+
+const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
+const canvasWrap = $("#canvasWrap");
+const leftPanel = $("#leftPanel");
+const rightPanel = $("#rightPanel");
+
+function renderCanvas() {
+  canvasWrap.innerHTML = renderDoc(doc);
+}
+
+function h(html: string): HTMLElement {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild as HTMLElement;
+}
+
+// Color chips constrained to the active register's accents (+ ink option).
+function accentChips(
+  current: number | undefined,
+  opts: { allowInk?: boolean },
+  onPick: (idx: number) => void
+): HTMLElement {
+  const reg = REGISTERS[doc.register];
+  const wrap = h(`<div class="chips"></div>`);
+  if (opts.allowInk) {
+    const c = h(
+      `<button class="chip ink-chip ${current === undefined || current < 0 ? "active" : ""}"
+        style="background:${reg.ink}" title="Ink"></button>`
+    );
+    c.onclick = () => onPick(-1);
+    wrap.appendChild(c);
+  }
+  reg.accents.forEach((hex, i) => {
+    const c = h(
+      `<button class="chip ${current === i ? "active" : ""}" style="background:${hex}" title="${hex}"></button>`
+    );
+    c.onclick = () => onPick(i);
+    wrap.appendChild(c);
+  });
+  return wrap;
+}
+
+// --- left panel: template, register, season ---------------------------------
+
+function buildLeft() {
+  leftPanel.innerHTML = "";
+  leftPanel.appendChild(h(`<h3 class="panel-title">Template</h3>`));
+  for (const t of TEMPLATES) {
+    const card = h(
+      `<button class="tpl-card ${t.id === doc.template ? "active" : ""}">
+        <div class="t">${t.label}</div><div class="b">${t.blurb}</div>
+      </button>`
+    );
+    card.onclick = () => {
+      const keepFields = doc.fields;
+      doc = newDoc(t.id);
+      for (const z of docTemplate(doc).zones)
+        if (keepFields[z.id]) doc.fields[z.id] = keepFields[z.id];
+      buildAll();
+    };
+    leftPanel.appendChild(card);
+  }
+
+  leftPanel.appendChild(h(`<h3 class="panel-title">Register</h3>`));
+  const seg = h(`<div class="seg"></div>`);
+  (Object.keys(REGISTERS) as RegisterKey[]).forEach((k) => {
+    const b = h(`<button class="${doc.register === k ? "active" : ""}">${REGISTERS[k].label}</button>`);
+    b.onclick = () => {
+      doc.register = k;
+      buildAll();
+    };
+    seg.appendChild(b);
+  });
+  leftPanel.appendChild(seg);
+
+  if (doc.register === "interior") {
+    leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
+    const chips = h(`<div class="chips"></div>`);
+    for (const s of SEASONS) {
+      const c = h(
+        `<button class="chip ${doc.season === s.key ? "active" : ""}" style="background:${s.accent}" title="${s.label}"></button>`
+      );
+      c.onclick = () => {
+        doc.season = s.key;
+        buildLeft();
+        renderCanvas();
+      };
+      chips.appendChild(c);
+    }
+    leftPanel.appendChild(chips);
+    leftPanel.appendChild(
+      h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
+    );
+  }
+
+  leftPanel.appendChild(
+    h(`<div class="note">Everything here draws from the canon — palettes, faces, and motifs
+      from the brand brief. Compose freely; it can't go off-brand.</div>`)
+  );
+}
+
+// --- right panel: contextual controls ---------------------------------------
+
+function fieldControls(into: HTMLElement) {
+  const t = docTemplate(doc);
+  if (!t.zones.length) return;
+  into.appendChild(h(`<h3 class="panel-title">Words</h3>`));
+  for (const z of t.zones) {
+    const f = h(`<div class="field"><label>${z.label}</label></div>`);
+    const multi = (z.lines ?? 3) > 1 && z.role !== "display";
+    const input = h(
+      multi
+        ? `<textarea rows="2">${doc.fields[z.id] ?? ""}</textarea>`
+        : `<input type="text" value="${(doc.fields[z.id] ?? "").replaceAll('"', "&quot;")}">`
+    ) as HTMLInputElement;
+    input.oninput = () => {
+      doc.fields[z.id] = input.value;
+      renderCanvas();
+    };
+    f.appendChild(input);
+    if (z.colorable) {
+      f.appendChild(
+        accentChips(doc.fieldAccents[z.id], { allowInk: true }, (idx) => {
+          doc.fieldAccents[z.id] = idx;
+          buildRight();
+          renderCanvas();
+        })
+      );
+    }
+    into.appendChild(f);
+  }
+}
+
+function motifControls(into: HTMLElement) {
+  const t = docTemplate(doc);
+  if (!t.motifSlot || !doc.motif) return;
+  into.appendChild(h(`<h3 class="panel-title">Motif</h3>`));
+  const sel = h(
+    `<div class="field"><select>${ENGINES.map(
+      (e) => `<option value="${e.id}" ${doc.motif!.engine === e.id ? "selected" : ""}>${e.label}</option>`
+    ).join("")}</select></div>`
+  );
+  (sel.querySelector("select") as HTMLSelectElement).onchange = (ev) => {
+    const id = (ev.target as HTMLSelectElement).value;
+    const e = engineById(id)!;
+    doc.motif = { ...doc.motif!, engine: id, params: defaultParams(e) };
+    buildRight();
+    renderCanvas();
+  };
+  into.appendChild(sel);
+  const eng = engineById(doc.motif.engine)!;
+  into.appendChild(h(`<div class="note">${eng.blurb}</div>`));
+
+  for (const p of eng.params) {
+    const f = h(`<div class="field"><label>${p.label}</label></div>`);
+    const r = h(
+      `<input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${doc.motif.params[p.key]}">`
+    ) as HTMLInputElement;
+    r.oninput = () => {
+      doc.motif!.params[p.key] = Number(r.value);
+      renderCanvas();
+    };
+    f.appendChild(r);
+    into.appendChild(f);
+  }
+
+  const row = h(`<div class="row" style="margin-bottom:14px"></div>`);
+  const reroll = h(`<button class="mini" style="flex:1">↻ Reroll seed</button>`);
+  reroll.onclick = () => {
+    doc.motif!.seed = Math.floor(Math.random() * 1e6);
+    renderCanvas();
+  };
+  row.appendChild(reroll);
+  into.appendChild(row);
+
+  const colorsField = h(`<div class="field"><label>Motif colors</label></div>`);
+  doc.motif.accents.forEach((a, slot) => {
+    colorsField.appendChild(
+      accentChips(a, {}, (idx) => {
+        doc.motif!.accents[slot] = idx;
+        buildRight();
+        renderCanvas();
+      })
+    );
+  });
+  into.appendChild(colorsField);
+}
+
+function lineControls(into: HTMLElement) {
+  const t = docTemplate(doc);
+  if (!t.line) return;
+  into.appendChild(h(`<h3 class="panel-title">The Line</h3>`));
+  const tog = h(
+    `<div class="seg" style="margin-bottom:10px">
+      <button class="${doc.lineOn ? "active" : ""}">On</button>
+      <button class="${!doc.lineOn ? "active" : ""}">Off</button>
+    </div>`
+  );
+  const [on, off] = tog.querySelectorAll("button");
+  on.onclick = () => { doc.lineOn = true; buildRight(); renderCanvas(); };
+  off.onclick = () => { doc.lineOn = false; buildRight(); renderCanvas(); };
+  into.appendChild(tog);
+  if (!doc.lineOn) return;
+  const sliders: [string, keyof Doc["line"], { min: number; max: number }, number][] = [
+    ["Amplitude", "amp", LINE_MOTIF.amplitude, 0.005],
+    ["Periods", "periods", LINE_MOTIF.periods, 0.1],
+    ["Weight", "sw", LINE_MOTIF.strokeWidth, 0.25],
+  ];
+  for (const [label, key, range, step] of sliders) {
+    const f = h(`<div class="field"><label>${label}</label></div>`);
+    const r = h(
+      `<input type="range" min="${range.min}" max="${range.max}" step="${step}" value="${doc.line[key]}">`
+    ) as HTMLInputElement;
+    r.oninput = () => {
+      doc.line[key] = Number(r.value);
+      renderCanvas();
+    };
+    f.appendChild(r);
+    into.appendChild(f);
+  }
+}
+
+function diagramControls(into: HTMLElement) {
+  if (docTemplate(doc).kind !== "diagram") return;
+  const d = doc.diagram;
+  into.appendChild(h(`<h3 class="panel-title">Boxes</h3>`));
+  d.nodes.forEach((n, i) => {
+    const row = h(`<div class="row" style="margin-bottom:8px"></div>`);
+    const input = h(`<input type="text" value="${n.label.replaceAll('"', "&quot;")}" style="min-width:0">`) as HTMLInputElement;
+    input.className = "";
+    input.style.cssText =
+      "flex:1;background:var(--black);border:1px solid var(--line);color:var(--cream);padding:7px;border-radius:3px;font-family:Spectral,serif";
+    input.oninput = () => { n.label = input.value; renderCanvas(); };
+    const tint = h(`<button class="chip" style="background:${REGISTERS[doc.register].accents[n.accent % REGISTERS[doc.register].accents.length]};flex:0 0 auto"></button>`);
+    tint.onclick = () => { n.accent = (n.accent + 1) % REGISTERS[doc.register].accents.length; buildRight(); renderCanvas(); };
+    const del = h(`<button class="mini">✕</button>`);
+    del.onclick = () => {
+      d.nodes.splice(i, 1);
+      d.edges = d.edges
+        .filter(([a, b]) => a !== i && b !== i)
+        .map(([a, b]) => [a > i ? a - 1 : a, b > i ? b - 1 : b] as [number, number]);
+      buildRight();
+      renderCanvas();
+    };
+    row.append(input, tint, del);
+    into.appendChild(row);
+  });
+  const add = h(`<button class="act ghost">+ Add box</button>`);
+  add.onclick = () => {
+    d.nodes.push({ label: `Box ${d.nodes.length + 1}`, accent: d.nodes.length });
+    if (d.nodes.length > 1) d.edges.push([d.nodes.length - 2, d.nodes.length - 1]);
+    buildRight();
+    renderCanvas();
+  };
+  into.appendChild(add);
+
+  into.appendChild(h(`<h3 class="panel-title">Arrows</h3>`));
+  const opts = (sel: number) =>
+    d.nodes.map((n, i) => `<option value="${i}" ${i === sel ? "selected" : ""}>${i + 1}. ${n.label.slice(0, 14)}</option>`).join("");
+  d.edges.forEach((e, i) => {
+    const row = h(`<div class="row" style="margin-bottom:8px">
+      <select>${opts(e[0])}</select><select>${opts(e[1])}</select></div>`);
+    const [fromSel, toSel] = row.querySelectorAll("select");
+    (fromSel as HTMLSelectElement).onchange = () => { e[0] = Number((fromSel as HTMLSelectElement).value); renderCanvas(); };
+    (toSel as HTMLSelectElement).onchange = () => { e[1] = Number((toSel as HTMLSelectElement).value); renderCanvas(); };
+    const del = h(`<button class="mini">✕</button>`);
+    del.onclick = () => { d.edges.splice(i, 1); buildRight(); renderCanvas(); };
+    row.appendChild(del);
+    into.appendChild(row);
+  });
+  const addE = h(`<button class="act ghost">+ Add arrow</button>`);
+  addE.onclick = () => {
+    if (d.nodes.length >= 2) d.edges.push([0, d.nodes.length - 1]);
+    buildRight();
+    renderCanvas();
+  };
+  into.appendChild(addE);
+
+  into.appendChild(h(`<h3 class="panel-title">Flow</h3>`));
+  const seg = h(`<div class="seg">
+    <button class="${d.dir === "lr" ? "active" : ""}">Left → right</button>
+    <button class="${d.dir === "tb" ? "active" : ""}">Top ↓ bottom</button></div>`);
+  const [lr, tb] = seg.querySelectorAll("button");
+  lr.onclick = () => { d.dir = "lr"; buildRight(); renderCanvas(); };
+  tb.onclick = () => { d.dir = "tb"; buildRight(); renderCanvas(); };
+  into.appendChild(seg);
+}
+
+function stickerControls(into: HTMLElement) {
+  if (docTemplate(doc).kind !== "stickers") return;
+  into.appendChild(h(`<h3 class="panel-title">Marks</h3>`));
+  for (const m of MARKS) {
+    const on = doc.stickers.ids.includes(m.id);
+    const row = h(`<div class="row" style="margin-bottom:8px">
+      <button class="mini" style="flex:1;text-align:left">${on ? "☑" : "☐"} ${m.name}${m.placeholder ? ` <span class="pill">placeholder</span>` : ""}</button>
+    </div>`);
+    (row.querySelector("button") as HTMLButtonElement).onclick = () => {
+      doc.stickers.ids = on
+        ? doc.stickers.ids.filter((id) => id !== m.id)
+        : [...doc.stickers.ids, m.id];
+      buildRight();
+      renderCanvas();
+    };
+    into.appendChild(row);
+  }
+  into.appendChild(
+    h(`<div class="note">Finished redraws of the Brand Jam sketches (cudi catcher,
+      fortune teller, …) land here once they're pulled from Figma.</div>`)
+  );
+  const f = h(`<div class="field"><label>Tint start</label></div>`);
+  f.appendChild(
+    accentChips(doc.stickers.accent, {}, (idx) => {
+      doc.stickers.accent = idx;
+      buildRight();
+      renderCanvas();
+    })
+  );
+  into.appendChild(f);
+}
+
+function exportControls(into: HTMLElement) {
+  into.appendChild(h(`<h3 class="panel-title">Ship it</h3>`));
+  const svgB = h(`<button class="act">Export SVG</button>`);
+  svgB.onclick = () => exportSvg(doc);
+  const pngB = h(`<button class="act ghost">Export PNG</button>`);
+  pngB.onclick = () => exportPng(doc);
+  const saveB = h(`<button class="act ghost">Save to gallery</button>`);
+  saveB.onclick = () => {
+    const name = prompt("Name this piece:", doc.name ?? "");
+    if (name === null) return;
+    doc.name = name || "Untitled";
+    saveToGallery(doc, doc.name);
+    saveB.textContent = "Saved ✓";
+    setTimeout(() => (saveB.textContent = "Save to gallery"), 1400);
+  };
+  const shareB = h(`<button class="act ghost">Copy share link</button>`);
+  shareB.onclick = async () => {
+    const url = `${location.origin}${location.pathname}#d=${encodeDoc(doc)}`;
+    await navigator.clipboard.writeText(url);
+    shareB.textContent = "Link copied ✓";
+    setTimeout(() => (shareB.textContent = "Copy share link"), 1400);
+  };
+  into.append(svgB, pngB, saveB, shareB);
+}
+
+function buildRight() {
+  rightPanel.innerHTML = "";
+  fieldControls(rightPanel);
+  motifControls(rightPanel);
+  lineControls(rightPanel);
+  diagramControls(rightPanel);
+  stickerControls(rightPanel);
+  exportControls(rightPanel);
+}
+
+// --- gallery -----------------------------------------------------------------
+
+function buildGallery() {
+  const view = $("#galleryView");
+  view.innerHTML = "";
+  const items = loadGallery();
+  if (!items.length) {
+    view.appendChild(
+      h(`<div class="g-empty">Nothing saved yet. Make something in the studio and
+        “Save to gallery” — anything saved here can be remixed by whoever uses this
+        browser, and share links carry full remixable compositions to everyone else.</div>`)
+    );
+    return;
+  }
+  for (const item of items) {
+    const card = h(`<div class="g-card">
+      <div class="thumb">${renderDoc(item.doc)}</div>
+      <div class="meta">
+        <div class="n">${item.name}</div><div class="d">${item.date}</div>
+        <div class="row"></div>
+      </div></div>`);
+    const row = card.querySelector(".row")!;
+    const remix = h(`<button class="mini">Remix</button>`);
+    remix.onclick = () => {
+      doc = JSON.parse(JSON.stringify(item.doc));
+      switchView("make");
+      buildAll();
+    };
+    const share = h(`<button class="mini">Link</button>`);
+    share.onclick = async () => {
+      await navigator.clipboard.writeText(
+        `${location.origin}${location.pathname}#d=${encodeDoc(item.doc)}`
+      );
+      share.textContent = "✓";
+      setTimeout(() => (share.textContent = "Link"), 1200);
+    };
+    const del = h(`<button class="mini">✕</button>`);
+    del.onclick = () => {
+      removeFromGallery(item.id);
+      buildGallery();
+    };
+    row.append(remix, share, del);
+    view.appendChild(card);
+  }
+}
+
+// --- canon (guidelines) ------------------------------------------------------
+
+function buildCanon() {
+  const sw = (name: string, hex: string) =>
+    `<div class="swatch"><div class="c" style="background:${hex}"></div><div class="l">${name}<br>${hex}</div></div>`;
+  $("#canonView").innerHTML = `
+  <div class="canon-inner">
+    <h1>The Canon</h1>
+    <p class="lede">${BRAND_SENTENCE}</p>
+    <p>This page is the living draft of The Fold's brand guidelines — the rules this
+    tool enforces. It is honest about what's decided and what isn't. The brand belongs
+    to the community the way a song belongs to a band: anyone can play it, and it still
+    sounds like us.</p>
+
+    <h2>Two registers</h2>
+    <p><strong>${REGISTERS.exterior.label}.</strong> ${REGISTERS.exterior.blurb}</p>
+    <div class="swatch-row">${[sw("Sign black", REGISTERS.exterior.ground), ...REGISTERS.exterior.accents.map((a) => sw("Gold register", a))].join("")}</div>
+    <p><strong>${REGISTERS.interior.label}.</strong> ${REGISTERS.interior.blurb}</p>
+    <div class="swatch-row">${[sw("Cream ground", REGISTERS.interior.ground), ...REGISTERS.interior.accents.map((a) => sw("Accent", a))].join("")}</div>
+
+    <h2>Palettes</h2>
+    <p>${PALETTES.v1.label} is the working preferred palette; ${PALETTES.v2.label} exists for contrast and accessibility.</p>
+    <div class="swatch-row">${PALETTES.v1.swatches.map((s) => sw(s.name, s.hex)).join("")}</div>
+    <div class="swatch-row">${PALETTES.v2.swatches.map((s) => sw(s.name, s.hex)).join("")}</div>
+
+    <h2>The Line</h2>
+    <p>A sine wave — precise, generative, alive. It reads as time, fabric, clothesline,
+    season. Structure is constant; color is variable; time is marked by hue. Each season
+    tints the Line:</p>
+    <div class="swatch-row">${SEASONS.map((s) => sw(s.label, s.accent)).join("")}</div>
+
+    <h2>Typography</h2>
+    ${FACES.map(
+      (f) =>
+        `<p class="face-demo" style="font-family:'${f.name}',serif;font-weight:${f.weight}">${f.name} — The Fold, a gathering place <span class="pill">${f.role}</span></p>`
+    ).join("")}
+    <p>The wordmark is ${TYPE_RULES.wordmark.text} in ${TYPE_RULES.wordmark.face}, all caps,
+    tracked wide — it carries the weight of the sign. All faces are open-licensed (OFL) so
+    everything this tool makes is shippable. The final brand typeface is an open decision.</p>
+
+    <h2>The marks</h2>
+    <p>Community marks — hand-souled, single-weight, recolorable within the canon.
+    Finished redraws of the Brand Jam sketches join this family.</p>
+    <div class="mark-row">${MARKS.map(
+      (m) =>
+        `<div class="mark-cell"><div class="m"><svg viewBox="${m.viewBox}">${m.svg}</svg></div>
+        <div class="l">${m.name}${m.placeholder ? " · placeholder" : ""}</div></div>`
+    ).join("")}</div>
+
+    <h2>Never</h2>
+    <ul>${AVOID.map((a) => `<li>${a}</li>`).join("")}</ul>
+
+    <h2>Open questions</h2>
+    <p>Decisions the brand stewards still own — the tool stays honest about them:</p>
+    <ul>${OPEN_QUESTIONS.map((q) => `<li>${q}</li>`).join("")}</ul>
+  </div>`;
+}
+
+// --- view switching ----------------------------------------------------------
+
+function switchView(name: string) {
+  document.querySelectorAll("#nav button").forEach((b) => {
+    b.classList.toggle("active", (b as HTMLElement).dataset.view === name);
+  });
+  document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+  $(`#${name}View`).classList.add("active");
+  if (name === "gallery") buildGallery();
+  if (name === "canon") buildCanon();
+}
+
+document.querySelectorAll("#nav button").forEach((b) => {
+  (b as HTMLElement).onclick = () => switchView((b as HTMLElement).dataset.view!);
+});
+
+function buildAll() {
+  buildLeft();
+  buildRight();
+  renderCanvas();
+}
+
+buildAll();

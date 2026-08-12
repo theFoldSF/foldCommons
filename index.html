@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fold Commons — The Fold's community design tool</title>
+    <meta name="description" content="Compose on-brand flyers, stories, diagrams, and stickers from The Fold's shared brand canon." />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="wordmark">THE FOLD</div>
+        <div class="app-name">Commons</div>
+        <nav id="nav">
+          <button data-view="make" class="active">Make</button>
+          <button data-view="gallery">Gallery</button>
+          <button data-view="canon">The Canon</button>
+        </nav>
+      </header>
+      <main id="views">
+        <section id="makeView" class="view active">
+          <aside id="leftPanel"></aside>
+          <div id="stage"><div id="canvasWrap"></div></div>
+          <aside id="rightPanel"></aside>
+        </section>
+        <section id="galleryView" class="view"></section>
+        <section id="canonView" class="view"></section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
