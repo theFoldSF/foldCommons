@@ -117,8 +117,10 @@ async function exportNodes(fileKey: string, dir: string, nodes: Inv[], format: "
 }
 
 const inventoryOnly = process.argv.includes("--inventory-only");
+const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
 
 for (const f of FILES) {
+  if (only && f.name !== only) continue;
   console.log(`\n── ${f.name} (${f.key}) ──`);
   const doc = await api(`/v1/files/${f.key}`);
   const inv: Inv[] = [];

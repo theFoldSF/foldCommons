@@ -266,9 +266,8 @@ function diagramControls(into: HTMLElement) {
   d.nodes.forEach((n, i) => {
     const row = h(`<div class="row" style="margin-bottom:8px"></div>`);
     const input = h(`<input type="text" value="${n.label.replaceAll('"', "&quot;")}" style="min-width:0">`) as HTMLInputElement;
-    input.className = "";
     input.style.cssText =
-      "flex:1;background:var(--black);border:1px solid var(--line);color:var(--cream);padding:7px;border-radius:3px;font-family:Spectral,serif";
+      "flex:1;background:var(--cream);border:1px solid var(--rule);color:var(--ink);padding:7px;border-radius:2px;font-family:Figtree,sans-serif;font-size:13.5px";
     input.oninput = () => { n.label = input.value; renderCanvas(); };
     const tint = h(`<button class="chip" style="background:${REGISTERS[doc.register].accents[n.accent % REGISTERS[doc.register].accents.length]};flex:0 0 auto"></button>`);
     tint.onclick = () => { n.accent = (n.accent + 1) % REGISTERS[doc.register].accents.length; buildRight(); renderCanvas(); };
