@@ -342,8 +342,9 @@ function stickerControls(into: HTMLElement) {
     into.appendChild(row);
   }
   into.appendChild(
-    h(`<div class="note">Finished redraws of the Brand Jam sketches (cudi catcher,
-      fortune teller, …) land here once they're pulled from Figma.</div>`)
+    h(`<div class="note">The community marks: Brand Jam sketches (cootie catcher, the
+      hand-drawn fold, the TF ligature) and the lockup wireframe meshes. Anyone can
+      stamp and tint them — like a certain band's bears.</div>`)
   );
   const f = h(`<div class="field"><label>Tint start</label></div>`);
   f.appendChild(

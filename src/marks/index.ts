@@ -13,28 +13,46 @@ export interface Mark {
 
 export const MARKS: Mark[] = [];
 
-const MESHES = ["01", "02", "03", "04", "05", "06"];
+interface ManifestEntry {
+  id: string;
+  name: string;
+  file: string;
+  stroked?: boolean; // stroke-drawn (meshes) vs filled outlines (traced sketches)
+}
+
+const MANIFEST: ManifestEntry[] = [
+  { id: "cootie-catcher", name: "Cootie catcher", file: "cootie-catcher.svg" },
+  { id: "fold-script", name: "fold · hand script", file: "fold-script.svg" },
+  { id: "tf-ligature", name: "TF ligature", file: "tf-ligature.svg" },
+  ...["01", "02", "03", "04", "05", "06"].map((n) => ({
+    id: `mesh-${n}`,
+    name: `Fold mesh ${Number(n)}`,
+    file: `fold-mesh-${n}.svg`,
+    stroked: true,
+  })),
+];
 
 export async function loadMarks(onLoaded?: () => void) {
+  const loaded: Mark[] = [];
   await Promise.all(
-    MESHES.map(async (n) => {
+    MANIFEST.map(async (m) => {
       try {
-        const text = await (await fetch(`marks/fold-mesh-${n}.svg`)).text();
+        const text = await (await fetch(`marks/${m.file}`)).text();
         const viewBox = text.match(/viewBox="([^"]+)"/)?.[1];
         const inner = text.replace(/^[^>]*>/, "").replace(/<\/svg>\s*$/, "");
         if (!viewBox) return;
-        MARKS.push({
-          id: `mesh-${n}`,
-          name: `Fold mesh ${Number(n)}`,
-          viewBox,
-          svg: `<g fill="none" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round">${inner}</g>`,
-        });
+        const wrap = m.stroked
+          ? `<g fill="none" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round">${inner}</g>`
+          : `<g fill="currentColor">${inner}</g>`;
+        loaded.push({ id: m.id, name: m.name, viewBox, svg: wrap });
       } catch {
         // dev server without the asset — library just stays smaller
       }
     })
   );
-  MARKS.sort((a, b) => a.id.localeCompare(b.id));
+  // manifest order, not fetch-completion order
+  loaded.sort((a, b) => MANIFEST.findIndex((m) => m.id === a.id) - MANIFEST.findIndex((m) => m.id === b.id));
+  MARKS.push(...loaded);
   onLoaded?.();
 }
 
