@@ -22,25 +22,20 @@ for (const f of files) {
   const result = await page.evaluate(() => {
     const svg = document.querySelector("svg")!;
     svg.querySelectorAll("text").forEach((t) => t.remove());
-    // Background rects: full-bleed fills (cls-3 etc.) — anything filled, unstroked, huge.
-    const vb = svg.viewBox.baseVal;
-    svg.querySelectorAll("rect, path").forEach((el) => {
-      const bb = (el as SVGGraphicsElement).getBBox();
+    // The meshes are stroke-only: drop every filled, unstroked shape — that
+    // removes backgrounds AND outlined wordmark glyphs in one rule.
+    svg.querySelectorAll("rect, path, polygon, circle, ellipse").forEach((el) => {
       const cs = getComputedStyle(el);
-      if (bb.width > vb.width * 0.9 && bb.height > vb.height * 0.9 && cs.fill !== "none" && cs.stroke === "none")
-        el.remove();
+      if (cs.fill !== "none" && cs.stroke === "none") el.remove();
     });
-    // Everything left should be the mesh. Normalize stroke to currentColor.
+    // Everything left is mesh. Normalize stroke to currentColor.
     let strokeW = 0.8;
     svg.querySelectorAll("*").forEach((el) => {
       const cs = getComputedStyle(el);
       if (cs.stroke && cs.stroke !== "none") {
         (el as SVGElement).setAttribute("stroke", "currentColor");
+        (el as SVGElement).setAttribute("fill", "none");
         strokeW = parseFloat(cs.strokeWidth) || strokeW;
-      }
-      if (cs.fill && cs.fill !== "none" && cs.fill !== "rgb(0, 0, 0)") {
-        // filled mesh bits (rare) also follow currentColor
-        (el as SVGElement).setAttribute("fill", "currentColor");
       }
       (el as SVGElement).removeAttribute("class");
     });
