@@ -15,8 +15,10 @@ anyone — while the canon itself stays steward-curated.
   engine seeds/params, and your words. There is no free color input, no free
   font input, no freeform layout. Off-brand output isn't forbidden; it's
   inexpressible.
-- **Two registers**: exterior (black + gold leaf) and interior (cream + jewel
-  tones, seasonal). Switching registers re-restricts every color chip.
+- **Two registers**: paper (warm cream, ink, candy accents) and blueprint
+  (deep ink ground, cream traces). Switching registers re-restricts every
+  color chip. The canon is the fold-brand Figma deck's system: creams
+  #FFF9F1/#F8F3EC/#E8E4E1, ink #03071B, accents #FA6F2E/#FCA4EE/#88DCE9/#71D599.
 - **The Line**: the sine-wave motif is placed by each template; members tune it
   within canonical ranges. Its color follows the season — structure constant,
   color variable.
@@ -47,9 +49,10 @@ Static output, deployed on Vercel (`vercel.json` is set up; `vercel --prod`).
 
 ## Status
 
-Draft deliverable. Open brand decisions (final palette, final typeface,
-seasonal governance) are tracked on the in-app **Canon** page — the tool ships
-OFL faces (Fraunces, Spectral, Space Grotesk, …) so everything it makes is
-licensed cleanly while the type decision is open. The sticker marks currently
-include placeholders; finished redraws of the Brand Jam sketches (cudi catcher,
-fortune teller, …) replace them after the Figma pull.
+Draft deliverable. Open brand decisions (type licensing, wordmark casing,
+seasonal governance) are tracked on the in-app **Canon** page. The deck's type
+system is Denim + Fira Code + a chunky display face; Fira Code (OFL) is used
+verbatim, the others ship as OFL stand-ins (Figtree, Fraunces) until licensing
+is decided. The mark library holds the six wireframe fold meshes extracted
+from the lockups; hand-souled redraws of the Brand Jam sketches (cudi catcher,
+fortune teller, …) join them after the FigJam pull.
