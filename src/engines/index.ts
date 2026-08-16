@@ -3,6 +3,10 @@
 // seed always reproduces the same mark, so compositions are shareable.
 
 import mesh from "./foldMesh.js";
+import dither from "./dither.js";
+import dotfield from "./dotField.js";
+import network from "./foldNetwork.js";
+import weave from "./gridWeave.js";
 import fold from "./foldedSurface.js";
 import flow from "./flowField.js";
 import graph from "./graph.js";
@@ -59,6 +63,10 @@ const seededWrap: Engine = {
 
 export const ENGINES: Engine[] = [
   mesh as Engine,
+  dither as Engine,
+  dotfield as Engine,
+  network as Engine,
+  weave as Engine,
   fold as Engine,
   quilt as Engine,
   graph as Engine,
