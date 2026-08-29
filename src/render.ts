@@ -164,9 +164,11 @@ function lineChipsSvg(
   const hasDate = dateText.trim().length > 0;
   const hasTime = timeText.trim().length > 0;
   if (!hasDate && !hasTime) return { svg: "", w: 0 };
-  const charW = size * 0.54;
-  const dateW = hasDate ? dateText.length * charW : 0;
-  const timeW = hasTime ? timeText.length * charW : 0;
+  // real glyph widths — the squiggle and the pills key off the exact text
+  // edges, so a char-count estimate reads as visible misalignment here
+  const fam = fontFamilyCss("Figtree");
+  const dateW = hasDate ? measureTextWidth(dateText, fam, 600, size) : 0;
+  const timeW = hasTime ? measureTextWidth(timeText, fam, 600, size) : 0;
   const gap = size * 1.6;
   const pillW = size * 0.95, pillH = size * 0.2;
   const textY = cy - size * 0.35; // baseline
@@ -199,8 +201,9 @@ function lineChipsSvg(
     // a gentle hand-drawn connector, not a jagged squiggle — small amplitude,
     // smoothed, sitting clear of both the text above and the pills below
     const rr = rng(seed >>> 0);
-    const x1 = dateLeft + dateW + size * 0.1;
-    const x2 = timeLeft - size * 0.1;
+    // the line fills the whole gap, with equal breathing room off each text
+    const x1 = dateLeft + dateW + size * 0.3;
+    const x2 = timeLeft - size * 0.3;
     const n = 3;
     const pts: [number, number][] = [];
     for (let i = 0; i <= n; i++) {
@@ -376,7 +379,7 @@ function fitTitle(title: string, size0: number, maxW: number, minFactor = 0.45):
   return { size, w: measureTextWidth(title, fam, face.weight, size) };
 }
 
-function titleTextSvg(text: string, x: number, yBaseline: number, align: "start" | "end", size: number, ink: string): string {
+function titleTextSvg(text: string, x: number, yBaseline: number, align: "start" | "middle" | "end", size: number, ink: string): string {
   return `<text x="${x.toFixed(1)}" y="${yBaseline.toFixed(1)}" text-anchor="${align}" fill="${ink}"
     font-family="${fontFamilyCss(heading().name)}" font-size="${size.toFixed(1)}"
     font-weight="${heading().weight}">${esc(text)}</text>`;
@@ -503,7 +506,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
       const belowExtent = titlePlateBelowBaseline(size);
       const chipRowTop = chipCy - chipH / 2;
       const desiredBaseline = H - H * 0.25 + size * 0.34; // 25% up from the bottom
-      const baseline = Math.min(desiredBaseline, chipRowTop - m * 0.3 - belowExtent);
+      const baseline = Math.min(desiredBaseline, chipRowTop - m * 0.55 - belowExtent);
       const plateTop = baseline - titlePlateAboveBaseline(size);
       const plateBottom = baseline + belowExtent;
       wordsSvg += xfWrap(doc, "title", titleX + w / 2, (plateTop + plateBottom) / 2,
@@ -529,7 +532,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
       // so the PLATE (not just the bare baseline) keeps its gap above the chips
       const belowExtent = titlePlateBelowBaseline(size);
       const chipRowTop = chipCy - chipH / 2;
-      const baseline = chipRowTop - m * 0.3 - belowExtent;
+      const baseline = chipRowTop - m * 0.55 - belowExtent;
       const plateTop = baseline - titlePlateAboveBaseline(size);
       const plateBottom = baseline + belowExtent;
       wordsSvg += xfWrap(doc, "title", titleX + w / 2, (plateTop + plateBottom) / 2,
@@ -544,15 +547,23 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const bandTop = rowCy - bandH / 2;
     const sigX = m * 0.55, sigY = rowCy - sigH / 2;
     wordsSvg += xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, ink));
-    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, ink, "end");
-    wordsSvg += row.svg;
+    const row0 = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, ink, "end");
+    let rowOut = row0;
+    let titleOut = "";
     if (title) {
-      const titleBoundary = row.hasAny ? row.farEdge - c.chipSize * 0.8 : row.farEdge;
+      const titleBoundary = row0.hasAny ? row0.farEdge - c.chipSize * 0.8 : row0.farEdge;
       const titleX = m * 0.55 + sigW + c.titleSize * 0.5;
       const maxW = Math.max(60, titleBoundary - titleX);
-      const { size, w } = fitTitle(title, c.titleSize, maxW);
-      wordsSvg += xfWrap(doc, "title", titleX + w / 2, rowCy, titleTextSvg(title, titleX, rowCy + size * 0.34, "start", size, ink));
+      const { size } = fitTitle(title, c.titleSize, maxW);
+      // the title sits evenly between the signature and the chips
+      const cxT = (titleX + titleBoundary) / 2;
+      const baseline = rowCy + size * 0.34;
+      titleOut = xfWrap(doc, "title", cxT, rowCy, titleTextSvg(title, cxT, baseline, "middle", size, ink));
+      // squiggle chips share the title's baseline; their pills hang below it
+      if (chipStyle === "line" && row0.hasAny)
+        rowOut = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, baseline + c.chipSize * 0.35, c.chipSize, comp.frameSeed + 1, ink, "end");
     }
+    wordsSvg += rowOut.svg + titleOut;
     heroBottom = H - m * 0.8 - bandH - m * 0.45;
     proseDefault = { x: m, y: bandTop - m * 0.45, w: W - m * 2 };
   }
