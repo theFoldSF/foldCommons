@@ -7,7 +7,7 @@ import { SIGNATURE_ENGINE, engineById } from "./engines/index";
 import { framePath, ticketPath } from "./frames/index";
 import { markById } from "./marks/index";
 import { photoById } from "./photos/index";
-import { docAccent, docGround, docSeason, docTemplate, type Doc } from "./state";
+import { docAccent, docGround, docSeason, docTemplate, type Doc, type XfKey } from "./state";
 import type { TextZone } from "./templates/index";
 
 const esc = (s: string) =>
@@ -196,6 +196,21 @@ function bgTextureSvg(doc: Doc, W: number, H: number): string {
     <rect width="${W}" height="${H}" fill="${g.hex}" fill-opacity="${doc.comp.bgFade.toFixed(2)}"/>`;
 }
 
+// Photoshop-style free transform on a composed element: translate in canvas
+// units, uniform scale, rotation in degrees, pivoting on the element's own
+// untransformed center (cx,cy) — the literal center of the geometry passed in.
+// Wrapped in a <g data-el="KEY"> so the transform-tool overlay (main.ts) can
+// find and measure it via getBBox(); identity when no xf is stored.
+function xfWrap(doc: Doc, key: XfKey, cx: number, cy: number, inner: string): string {
+  const xf = doc.comp.xf?.[key];
+  const dx = xf?.dx ?? 0, dy = xf?.dy ?? 0, s = xf?.s ?? 1, rot = xf?.rot ?? 0;
+  const t =
+    dx || dy || s !== 1 || rot
+      ? ` transform="translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${rot.toFixed(2)}) scale(${s.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${dx.toFixed(2)} ${dy.toFixed(2)})"`
+      : "";
+  return `<g data-el="${key}"${t}>${inner}</g>`;
+}
+
 function composedSvg(doc: Doc, W: number, H: number): string {
   const t = docTemplate(doc);
   const c = t.comp!;
@@ -211,12 +226,16 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const sigW = c.logoH * 4.6;
   const bandH = Math.max(sigH, c.titleSize * 1.1);
   const rowCy = H - m * 0.8 - bandH / 2;
-  let bottom = signatureSvg(doc, m * 0.55, rowCy - sigH / 2, sigW, sigH, ink);
+  const sigX = m * 0.55, sigY = rowCy - sigH / 2;
+  let bottom = xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, ink));
   let right = W - m;
-  const time = chipSvg(doc.fields.time ?? "", docAccent(doc, comp.chipAccents[1]), right, rowCy, c.chipSize, comp.frameSeed + 1);
+  const timeRight = right;
+  const time = chipSvg(doc.fields.time ?? "", docAccent(doc, comp.chipAccents[1]), timeRight, rowCy, c.chipSize, comp.frameSeed + 1);
   right -= time.w ? time.w + c.chipSize * 0.6 : 0;
-  const date = chipSvg(doc.fields.date ?? "", docAccent(doc, comp.chipAccents[0]), right, rowCy, c.chipSize, comp.frameSeed + 2);
-  bottom += time.svg + date.svg;
+  const dateRight = right;
+  const date = chipSvg(doc.fields.date ?? "", docAccent(doc, comp.chipAccents[0]), dateRight, rowCy, c.chipSize, comp.frameSeed + 2);
+  if (time.svg) bottom += xfWrap(doc, "time", timeRight - time.w / 2, rowCy, time.svg);
+  if (date.svg) bottom += xfWrap(doc, "date", dateRight - date.w / 2, rowCy, date.svg);
   right -= date.w ? date.w + c.chipSize * 0.8 : 0;
   if (title) {
     // shrink-to-fit between the signature and the chips — never overlaps
@@ -225,9 +244,11 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     let tSize = c.titleSize;
     if (title.length * tSize * 0.55 > maxW)
       tSize = Math.max(c.titleSize * 0.45, maxW / (title.length * 0.55));
-    bottom += `<text x="${titleX.toFixed(1)}" y="${(rowCy + tSize * 0.34).toFixed(1)}" fill="${ink}"
+    const approxW = Math.min(maxW, title.length * tSize * 0.55);
+    const titleSvg = `<text x="${titleX.toFixed(1)}" y="${(rowCy + tSize * 0.34).toFixed(1)}" fill="${ink}"
       font-family="${fontFamilyCss(heading().name)}" font-size="${tSize.toFixed(1)}"
       font-weight="${heading().weight}">${esc(title)}</text>`;
+    bottom += xfWrap(doc, "title", titleX + approxW / 2, rowCy, titleSvg);
   }
 
   // Prose card — multi-line body copy in its own frame, above the band.
@@ -260,11 +281,12 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const tspans = shown
       .map((l, i) => `<tspan x="${pad}" dy="${i === 0 ? 0 : lh}">${esc(l)}</tspan>`)
       .join("");
-    text += `<g transform="translate(${m} ${py.toFixed(1)})">
+    const proseSvg = `<g transform="translate(${m} ${py.toFixed(1)})">
       <path d="${fp.d}"${fp.transform ? ` transform="${fp.transform}"` : ""} fill="${g.hex}" stroke="${ink}" stroke-width="2"/>
       <text x="${pad}" y="${pad + c.detailSize * 0.85}" fill="${ink}"
         font-family="${fontFamilyCss(bodyFace().name)}" font-size="${c.detailSize}"
         font-weight="${bodyFace().weight}">${tspans}</text></g>`;
+    text += xfWrap(doc, "prose", m + pw / 2, py + ph / 2, proseSvg);
     proseTop = py - m * 0.45;
   }
 
@@ -272,8 +294,9 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const heroBottom = proseTop;
 
   if (comp.layout === "hero" || comp.layout === "panel") {
-    const win = frameWindow(doc, m * 0.7, heroTop, W - m * 1.4, heroBottom - heroTop,
-      comp.layout === "panel" ? "fill" : "photo");
+    const winX = m * 0.7, winY = heroTop, winW = W - m * 1.4, winH = heroBottom - heroTop;
+    const win = xfWrap(doc, "photo", winX + winW / 2, winY + winH / 2,
+      frameWindow(doc, winX, winY, winW, winH, comp.layout === "panel" ? "fill" : "photo"));
     return bg + win + text + bottom;
   }
 
@@ -296,7 +319,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const ph = Math.min(heroBottom - m * 1.8, H * 0.52);
     const px = (W - pw) / 2;
     const py = m + (heroBottom - m - ph) * 0.42;
-    const photo = frameWindow(doc, px, py, pw, ph, "photo");
+    const photo = xfWrap(doc, "photo", px + pw / 2, py + ph / 2, frameWindow(doc, px, py, pw, ph, "photo"));
     return bg + motifBox(mp, mp, W - mp * 2, heroBottom - mp * 2) + photo + text + bottom;
   }
 
@@ -307,7 +330,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const ph = Math.min(heroBottom - m * 1.6, H * 0.5);
   const px = (W - pw) / 2;
   const py = Math.max(m * 1.4, motifH - ph * 0.82);
-  const photo = frameWindow(doc, px, py, pw, ph, "photo");
+  const photo = xfWrap(doc, "photo", px + pw / 2, py + ph / 2, frameWindow(doc, px, py, pw, ph, "photo"));
   return bg + motif + photo + text + bottom;
 }
 

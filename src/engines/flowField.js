@@ -4,7 +4,7 @@
 // each strand is a soft palette hang doubled by a thin ink centerline (the organic +
 // the diagrammatic), pegged with ink nodes, and woven across by faint dashed quilting
 // threads — the clothesline as a piece of the same quilted-space-time family.
-import { rng, makeFlow, smoothPath, el, round } from "./util.js";
+import { rng, makeFlow, smoothPath, el, round, clamp } from "./util.js";
 
 export default {
   id: "flow",
@@ -35,10 +35,21 @@ export default {
       const len = maxLen * (0.6 + 0.4 * r());
       const pts = [{ x: x0, y: baseY }];
       let x = x0, y = baseY;
+      const marginL = w * 0.03, marginR = w * 0.97, soft = w * 0.08;
       for (let s = 0; s < len; s += step) {
         const ang = flow(x, y);
-        x += Math.cos(ang) * step * p.curl;        // cloth hangs; the flow only perturbs the fall
-        y += step * (0.7 + 0.3 * Math.sin(ang));
+        let cx = Math.cos(ang);
+        const sy = Math.sin(ang);
+        // steer smoothly back inside as the strand nears a side margin,
+        // instead of letting it wander past and get clipped by the frame
+        const nearest = Math.min(x - marginL, marginR - x);
+        if (nearest < soft) {
+          const t = clamp(1 - nearest / soft, 0, 1);
+          const inward = x - marginL < marginR - x ? 1 : -1;
+          cx = cx * (1 - t) + inward * 0.6 * t;
+        }
+        x += cx * step * p.curl;        // cloth hangs; the flow only perturbs the fall
+        y += step * (0.7 + 0.3 * sy);
         pts.push({ x, y });
         if (y > h * 0.96) break;
       }

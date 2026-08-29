@@ -63,7 +63,7 @@ export const engineById = (id: string) => ENGINES.find((e) => e.id === id);
 // the sliders' full extremes, so a random roll always lands somewhere
 // tasteful. Params not listed stay at their default.
 export const SHUFFLE_RANGES: Record<string, Record<string, [number, number]>> = {
-  mesh: { field: [0, 3], render: [0, 3], lines: [8, 26], warp: [0.5, 1.1], radius: [0.14, 0.3], swirl: [0.3, 1.6], depth: [0.35, 0.85], tilt: [0.3, 0.9], persp: [0.3, 0.7], sing: [1, 4], weight: [0.8, 2] },
+  mesh: { field: [0, 3], render: [0, 2], lines: [8, 26], warp: [0.5, 1.1], radius: [0.11, 0.19], swirl: [0.2, 0.7], depth: [0.35, 0.85], tilt: [0.3, 0.9], persp: [0.3, 0.7], sing: [1, 3], weight: [0.8, 1.6] },
   dither: { warp: [0.7, 1.4], radius: [0.2, 0.34], contrast: [0.9, 1.7], grain: [0.7, 1.3], sing: [1, 3] },
   dotfield: { patches: [2, 4], density: [14, 24], blobs: [1, 3], markers: [5, 14], wobble: [0.2, 0.6] },
   weave: { cells: [3, 6], lobes: [3, 6], amp: [0.08, 0.22], strands: [1, 3], hand: [0.25, 0.6] },
@@ -71,8 +71,8 @@ export const SHUFFLE_RANGES: Record<string, Record<string, [number, number]>> = 
   cloth: { cols: [14, 26], drape: [0.5, 0.9], sway: [0.1, 0.6], pins: [2, 5], grid: [10, 20], warp: [0.25, 0.7], patch: [0.2, 0.6], marks: [0.3, 0.7], shade: [0.5, 0.9] },
   graph: { nodes: [10, 26], density: [0.2, 0.55], spread: [0.55, 1.0], scale: [0.5, 1.0], curve: [0.2, 0.8] },
   flow: { strands: [14, 40], length: [1, 1.4], curl: [0.25, 0.7], line: [0.15, 0.4], marks: [0.2, 0.6] },
-  scope: { ratio: [1, 4], fold: [1.2, 3.5], sym: [-0.5, 0.5], turns: [2, 5], echo: [0, 4], weight: [1, 2.2] },
-  sculpt: { count: [1, 2], size: [0.55, 1], tilt: [0, 0.5] },
+  scope: { ratio: [1, 4], fold: [1.2, 3.5], sym: [-0.5, 0.5], turns: [2, 5], weight: [1, 2.2] },
+  sculpt: { size: [0.55, 1], tilt: [0, 0.5] },
 };
 
 // Sample an engine's params for a shuffle roll: defaults, overridden by a

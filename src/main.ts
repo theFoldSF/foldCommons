@@ -26,6 +26,7 @@ import {
   BG_FADE,
   LAYOUTS,
   SIG_PARAMS,
+  XF_KEYS,
   decodeDoc,
   docGround,
   docTemplate,
@@ -37,6 +38,8 @@ import {
   saveToGallery,
   shuffleComp,
   type Doc,
+  type XfKey,
+  type XfState,
 } from "./state";
 import { exportPng, exportSvg } from "./export";
 
@@ -56,6 +59,7 @@ const rightPanel = $("#rightPanel");
 
 function renderCanvas() {
   canvasWrap.innerHTML = renderDoc(doc);
+  attachXfInteractivity();
 }
 
 function h(html: string): HTMLElement {
@@ -626,6 +630,228 @@ function exportControls(into: HTMLElement) {
     setTimeout(() => (shareB.textContent = "Copy share link"), 1400);
   };
   into.append(svgB, pngB, saveB, shareB);
+}
+
+// --- transform tool -----------------------------------------------------------
+// Photoshop-style free transform directly on the rendered SVG: hover any of
+// the composed layout's elements (data-el groups, written by render.ts) for a
+// dashed box; drag inside to move, corner squares to scale, the handle above
+// the top edge to rotate. Everything lives in the SVG's own coordinate space
+// (the composed doc's canvas units), so pointer↔doc mapping is exact via
+// getScreenCTM regardless of how the canvas is scaled on screen.
+
+const svgNS = "http://www.w3.org/2000/svg";
+
+function svgPoint(svg: SVGSVGElement, clientX: number, clientY: number): { x: number; y: number } {
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return { x: 0, y: 0 };
+  const pt = svg.createSVGPoint();
+  pt.x = clientX;
+  pt.y = clientY;
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
+function getXf(key: XfKey): XfState {
+  const x = doc.comp.xf?.[key];
+  return { dx: x?.dx ?? 0, dy: x?.dy ?? 0, s: x?.s ?? 1, rot: x?.rot ?? 0 };
+}
+
+function setXf(key: XfKey, xf: XfState) {
+  doc.comp.xf = { ...(doc.comp.xf ?? {}), [key]: xf };
+}
+
+function resetXf(key: XfKey) {
+  const xf = { ...(doc.comp.xf ?? {}) };
+  delete xf[key];
+  doc.comp.xf = xf;
+  renderCanvas();
+}
+
+// Apply an xf to a point given the pivot (cx,cy) — mirrors render.ts's
+// translate(cx,cy) rotate(rot) scale(s) translate(-cx,-cy) translate(dx,dy).
+function applyXf(p: { x: number; y: number }, cx: number, cy: number, xf: XfState) {
+  const rad = (xf.rot * Math.PI) / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const lx = (p.x - cx + xf.dx) * xf.s;
+  const ly = (p.y - cy + xf.dy) * xf.s;
+  return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos };
+}
+
+function xfTransformAttr(cx: number, cy: number, xf: XfState): string {
+  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${xf.rot.toFixed(2)}) scale(${xf.s.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${xf.dx.toFixed(2)} ${xf.dy.toFixed(2)})`;
+}
+
+interface DragState {
+  key: XfKey;
+  mode: "move" | "scale" | "rotate";
+  xf0: XfState;
+  cx: number;
+  cy: number;
+  g: SVGGElement;
+  pivotWorld: { x: number; y: number };
+  startWorld: { x: number; y: number };
+  startCornerDist: number;
+  startAngle: number;
+  live: XfState;
+}
+
+let dragState: DragState | null = null;
+
+function buildHandles(g: SVGGElement, key: XfKey) {
+  g.querySelector(".xf-chrome")?.remove();
+  let bbox: DOMRect;
+  try {
+    bbox = g.getBBox();
+  } catch {
+    return;
+  }
+  if (!bbox.width || !bbox.height) return;
+  const svg = g.ownerSVGElement!;
+  const H = Number(svg.getAttribute("height")) || bbox.height;
+  const hs = Math.max(7, H * 0.012);
+  const chrome = document.createElementNS(svgNS, "g");
+  chrome.setAttribute("class", "xf-chrome");
+
+  const rect = document.createElementNS(svgNS, "rect");
+  rect.setAttribute("x", String(bbox.x));
+  rect.setAttribute("y", String(bbox.y));
+  rect.setAttribute("width", String(bbox.width));
+  rect.setAttribute("height", String(bbox.height));
+  rect.setAttribute("class", "xf-box");
+  rect.addEventListener("pointerdown", (e) => startDrag(e, key, g, "move"));
+  rect.addEventListener("dblclick", () => resetXf(key));
+  chrome.appendChild(rect);
+
+  const corners: [number, number][] = [
+    [bbox.x, bbox.y],
+    [bbox.x + bbox.width, bbox.y],
+    [bbox.x, bbox.y + bbox.height],
+    [bbox.x + bbox.width, bbox.y + bbox.height],
+  ];
+  for (const [hx, hy] of corners) {
+    const handle = document.createElementNS(svgNS, "rect");
+    handle.setAttribute("x", String(hx - hs / 2));
+    handle.setAttribute("y", String(hy - hs / 2));
+    handle.setAttribute("width", String(hs));
+    handle.setAttribute("height", String(hs));
+    handle.setAttribute("class", "xf-handle");
+    handle.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      startDrag(e, key, g, "scale");
+    });
+    chrome.appendChild(handle);
+  }
+
+  const topMidX = bbox.x + bbox.width / 2;
+  const rotY = bbox.y - hs * 2.4;
+  const line = document.createElementNS(svgNS, "line");
+  line.setAttribute("x1", String(topMidX));
+  line.setAttribute("y1", String(bbox.y));
+  line.setAttribute("x2", String(topMidX));
+  line.setAttribute("y2", String(rotY));
+  line.setAttribute("class", "xf-rotline");
+  chrome.appendChild(line);
+  const rotHandle = document.createElementNS(svgNS, "circle");
+  rotHandle.setAttribute("cx", String(topMidX));
+  rotHandle.setAttribute("cy", String(rotY));
+  rotHandle.setAttribute("r", String(hs * 0.65));
+  rotHandle.setAttribute("class", "xf-handle xf-rotate");
+  rotHandle.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    startDrag(e, key, g, "rotate");
+  });
+  chrome.appendChild(rotHandle);
+
+  const reset = document.createElementNS(svgNS, "text");
+  reset.setAttribute("x", String(bbox.x + bbox.width + hs * 0.5));
+  reset.setAttribute("y", String(bbox.y - hs * 0.3));
+  reset.setAttribute("font-size", String(hs * 1.7));
+  reset.setAttribute("class", "xf-reset");
+  reset.textContent = "⟲";
+  reset.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    resetXf(key);
+  });
+  chrome.appendChild(reset);
+
+  g.appendChild(chrome);
+}
+
+function startDrag(e: PointerEvent, key: XfKey, g: SVGGElement, mode: DragState["mode"]) {
+  e.preventDefault();
+  e.stopPropagation();
+  const svg = g.ownerSVGElement as unknown as SVGSVGElement;
+  const bbox = g.getBBox();
+  const cx = bbox.x + bbox.width / 2, cy = bbox.y + bbox.height / 2;
+  const xf0 = getXf(key);
+  const world = svgPoint(svg, e.clientX, e.clientY);
+  const pivotWorld = applyXf({ x: cx, y: cy }, cx, cy, xf0);
+  let startCornerDist = 1, startAngle = 0;
+  if (mode === "scale") {
+    const corner = applyXf({ x: bbox.x + bbox.width, y: bbox.y + bbox.height }, cx, cy, xf0);
+    startCornerDist = Math.hypot(corner.x - pivotWorld.x, corner.y - pivotWorld.y) || 1;
+  }
+  if (mode === "rotate") startAngle = Math.atan2(world.y - pivotWorld.y, world.x - pivotWorld.x);
+  dragState = { key, mode, xf0, cx, cy, g, pivotWorld, startWorld: world, startCornerDist, startAngle, live: xf0 };
+  (e.target as Element).setPointerCapture?.(e.pointerId);
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragEnd, { once: true });
+}
+
+function onDragMove(e: PointerEvent) {
+  if (!dragState) return;
+  const svg = dragState.g.ownerSVGElement as unknown as SVGSVGElement;
+  const world = svgPoint(svg, e.clientX, e.clientY);
+  const xf: XfState = { ...dragState.xf0 };
+  if (dragState.mode === "move") {
+    const wdx = world.x - dragState.startWorld.x, wdy = world.y - dragState.startWorld.y;
+    const rad = (-dragState.xf0.rot * Math.PI) / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    const invS = 1 / (dragState.xf0.s || 1);
+    const ldx = (wdx * cos - wdy * sin) * invS;
+    const ldy = (wdx * sin + wdy * cos) * invS;
+    xf.dx = Math.max(-4000, Math.min(4000, dragState.xf0.dx + ldx));
+    xf.dy = Math.max(-4000, Math.min(4000, dragState.xf0.dy + ldy));
+  } else if (dragState.mode === "scale") {
+    const dist = Math.hypot(world.x - dragState.pivotWorld.x, world.y - dragState.pivotWorld.y);
+    const ratio = dist / dragState.startCornerDist;
+    xf.s = Math.max(0.3, Math.min(3, dragState.xf0.s * ratio));
+  } else {
+    const ang = Math.atan2(world.y - dragState.pivotWorld.y, world.x - dragState.pivotWorld.x);
+    const delta = ((ang - dragState.startAngle) * 180) / Math.PI;
+    xf.rot = Math.max(-180, Math.min(180, dragState.xf0.rot + delta));
+  }
+  dragState.live = xf;
+  // the chrome (box + handles) is a child of the g, so it tracks live for free
+  dragState.g.setAttribute("transform", xfTransformAttr(dragState.cx, dragState.cy, xf));
+}
+
+function onDragEnd() {
+  if (!dragState) return;
+  const { key, live } = dragState;
+  window.removeEventListener("pointermove", onDragMove);
+  dragState = null;
+  setXf(key, live);
+  renderCanvas();
+}
+
+// Re-attach hover/drag listeners on every render — innerHTML rebuilds the DOM.
+function attachXfInteractivity() {
+  if (!docTemplate(doc).composed) return;
+  const svgEl = canvasWrap.querySelector("svg");
+  if (!svgEl) return;
+  for (const key of XF_KEYS) {
+    const g = svgEl.querySelector(`[data-el="${key}"]`) as SVGGElement | null;
+    if (!g) continue;
+    g.classList.add("xf-el");
+    g.addEventListener("pointerenter", () => buildHandles(g, key));
+    g.addEventListener("pointerleave", () => {
+      if (dragState?.key === key) return;
+      g.querySelector(".xf-chrome")?.remove();
+    });
+  }
 }
 
 function buildRight() {

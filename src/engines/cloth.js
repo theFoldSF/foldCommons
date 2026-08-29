@@ -88,6 +88,27 @@ export default {
         }
     }
 
+    // bound without hard clipping: if the settled billow pushed any point
+    // outside the slot, uniformly scale the whole cloth about the pin line's
+    // top-center so it fits — the drape stays curved, nothing crosses the edge
+    {
+      const px = ox + (cols * spacing) / 2, py = oy;
+      let k = 1;
+      for (const q of pts) {
+        const dx = q.x - px, dy = q.y - py;
+        if (dx !== 0) {
+          if (q.x < w * 0.02) k = Math.min(k, (w * 0.02 - px) / dx);
+          if (q.x > w * 0.98) k = Math.min(k, (w * 0.98 - px) / dx);
+        }
+        if (dy !== 0) {
+          if (q.y > h * 0.97) k = Math.min(k, (h * 0.97 - py) / dy);
+          if (q.y < 0) k = Math.min(k, (0 - py) / dy);
+        }
+      }
+      k = Math.max(0.3, Math.min(1, k));
+      if (k < 1) for (const q of pts) { q.x = px + (q.x - px) * k; q.y = py + (q.y - py) * k; }
+    }
+
     // map a UV point to the settled cloth (bilinear over the grid)
     const mapUV = (u, v) => {
       const fx = clamp(u, 0, 1) * cols, fy = clamp(v, 0, 1) * rows;

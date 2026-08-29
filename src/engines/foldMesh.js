@@ -2,8 +2,8 @@
 // brand studio's Warp Lab: a sheet of space warped by seeded singularities
 // (gravity wells that pinch, vortices that swirl, twists that flip the plane
 // like a ribbon), given real depth by funnels in z, tilted and projected.
-// Four line families (lattice / contours / polar / streamlines) and four
-// renders (wireframe / translucent fills / both / dithered grain). The
+// Four line families (lattice / contours / polar / streamlines) and three
+// renders (wireframe / translucent fills with line edges / dithered grain). The
 // projection normalizes to the slot, so the mark always sits centered and
 // bounded — it cannot spill. Pure deterministic SVG.
 import { rng, smoothPath, round, clamp } from "./util.js";
@@ -19,16 +19,16 @@ export default {
     "The Warp Lab language: a sheet pinched by wells, swirled by vortices, flipped by ribbon twists — as wireframe, translucent folds, or photographic grain.",
   params: [
     { key: "field", label: "Field (0 lattice · 1 contours · 2 polar · 3 streams)", min: 0, max: 3, step: 1, default: 0 },
-    { key: "render", label: "Render (0 lines · 1 fills · 2 both · 3 grain)", min: 0, max: 3, step: 1, default: 0 },
+    { key: "render", label: "Render (0 lines · 1 fills+edges · 2 grain)", min: 0, max: 2, step: 1, default: 0 },
     { key: "lines", label: "Line count", min: 5, max: 48, step: 1, default: 18 },
     { key: "warp", label: "Warp depth", min: 0.1, max: 1.2, step: 0.01, default: 0.75 },
-    { key: "radius", label: "Well radius", min: 0.08, max: 0.3, step: 0.01, default: 0.24 },
-    { key: "swirl", label: "Vortex swirl", min: 0, max: 2.5, step: 0.01, default: 1 },
+    { key: "radius", label: "Well radius", min: 0.11, max: 0.19, step: 0.01, default: 0.15 },
+    { key: "swirl", label: "Vortex swirl", min: 0, max: 0.75, step: 0.01, default: 0.5 },
     { key: "depth", label: "Funnel depth", min: 0, max: 1, step: 0.01, default: 0.55 },
     { key: "tilt", label: "View tilt", min: 0, max: 1.3, step: 0.01, default: 0.5 },
     { key: "persp", label: "Perspective", min: 0, max: 1, step: 0.01, default: 0.6 },
-    { key: "sing", label: "Singularities", min: 1, max: 5, step: 1, default: 3 },
-    { key: "weight", label: "Line weight", min: 0.5, max: 3, step: 0.05, default: 1.2 },
+    { key: "sing", label: "Singularities", min: 1, max: 3, step: 1, default: 2 },
+    { key: "weight", label: "Line weight", min: 0.5, max: 1.75, step: 0.05, default: 1.1 },
     { key: "grain", label: "Grain density", min: 0.4, max: 1.6, step: 0.05, default: 1 },
   ],
 
@@ -219,13 +219,13 @@ export default {
     }
 
     const uvBands = [];
-    if (mode === 1 || mode === 2) {
+    if (mode === 1) {
       for (let i = 0; i < fam.length - 1; i++) uvBands.push([fam[i], fam[i + 1]]);
     }
 
     // dither: sample the sheet, light it, stipple — density is tone
     const ditherUV = [];
-    if (mode === 3) {
+    if (mode === 2) {
       const RD = 108;
       const rr = rng((seed >>> 0) * 40503 + 77);
       const eps = 1 / RD;
@@ -290,7 +290,7 @@ export default {
       }
       out += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${round(ds)}" stroke-linecap="round" stroke-opacity="0.9"/>`;
     }
-    if (mode === 0 || mode === 2) {
+    if (mode === 0 || mode === 1) {
       for (const ln of plines) {
         const d = smoothPath(ln.map(([x, y]) => ({ x, y })), { tension: 0.5 });
         out += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${round(wgt)}" stroke-linejoin="round" stroke-linecap="round"/>`;

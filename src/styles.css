@@ -46,7 +46,7 @@ body {
   display: flex;
   align-items: center;
 }
-.wordmark svg { height: 30px; width: auto; display: block; }
+.wordmark svg { height: 42px; width: auto; display: block; }
 .app-name {
   font-family: "Fira Code", monospace;
   color: var(--ink);
@@ -335,4 +335,35 @@ button.mini:hover { border-color: var(--ink); }
   font-size: 18px;
   color: var(--ink);
   opacity: 0.55;
+}
+
+/* --- transform tool: Photoshop-style free transform on composed elements --- */
+#canvasWrap svg .xf-el { cursor: move; }
+#canvasWrap svg .xf-chrome { pointer-events: auto; }
+#canvasWrap svg .xf-box {
+  fill: rgba(23, 29, 96, 0.04);
+  stroke: var(--blueprint);
+  stroke-width: 1.6;
+  stroke-dasharray: 7 5;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+#canvasWrap svg .xf-handle {
+  fill: var(--cream);
+  stroke: var(--blueprint);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+  cursor: nwse-resize;
+}
+#canvasWrap svg .xf-rotline {
+  stroke: var(--blueprint);
+  stroke-width: 1.2;
+  stroke-opacity: 0.7;
+  vector-effect: non-scaling-stroke;
+}
+#canvasWrap svg .xf-rotate { cursor: grab; }
+#canvasWrap svg .xf-reset {
+  fill: var(--blueprint);
+  cursor: pointer;
+  user-select: none;
 }

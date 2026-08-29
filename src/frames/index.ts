@@ -62,43 +62,63 @@ export function framePath(id: string, seed: number, w: number, h: number): { d: 
   const m = Math.min(w, h);
 
   if (id === "scallop") {
-    // The source comps build this from overlapping rounded-corner rectangles:
-    // each edge a run of soft lobes. Quieter than a cloud edge — modest lobes,
-    // irregular widths, shallow arcs. The inset is derived from the deepest
-    // possible bulge so a lobe can never leave the slot and get clipped.
-    const lobe = m * (0.085 + r() * 0.04);
-    const F_MIN = 1.25; // shallowest radius factor → deepest bulge
-    const maxBulge = (lobe * 1.35 * 0.5) * (F_MIN - Math.sqrt(F_MIN * F_MIN - 1));
-    const inset = maxBulge + m * 0.012;
+    // Each edge is a run of rounded-rectangle tabs of varying length but
+    // uniform height and corner radius, protruding outward from an inset
+    // baseline: quarter-arc up (radius rc), a straight top run, quarter-arc
+    // down, immediately into the next tab — a run of adjoining bumps, not
+    // circular scallops. Corner radius equals the tab height, so the arc
+    // alone carries the baseline up to the top run with no vertical wall.
+    const hgt = m * 0.045;
+    const rc = hgt;
+    const inset = hgt + m * 0.012;
     const iw = w - inset * 2;
     const ih = h - inset * 2;
-    const stations: Pt[] = [];
-    const edge = (a: Pt, b: Pt) => {
-      const len = Math.hypot(b.x - a.x, b.y - a.y);
-      const nSeg = Math.max(2, Math.round(len / lobe));
-      // irregular lobe widths: jittered weights, normalized to span the edge
-      const wts = Array.from({ length: nSeg }, () => 0.72 + r() * 0.63);
-      const total = wts.reduce((s, v) => s + v, 0);
-      let acc = 0;
-      for (let i = 0; i < nSeg; i++) {
-        const t = acc / total;
-        stations.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-        acc += wts[i];
+    const minLen = m * 0.1, maxLen = m * 0.22;
+    const ARC_SEG = 8;
+    // one edge's tabs, in a local (u = along edge, v = outward) frame
+    const edgeTabs = (a: Pt, b: Pt, n: Pt): Pt[] => {
+      const ex = b.x - a.x, ey = b.y - a.y;
+      const len = Math.hypot(ex, ey);
+      const ux = ex / len, uy = ey / len;
+      const toXY = (u: number, v: number): Pt => ({ x: a.x + ux * u + n.x * v, y: a.y + uy * u + n.y * v });
+      // jittered tab widths, normalized to fill the edge exactly
+      const widths: number[] = [];
+      let sum = 0;
+      while (sum < len) {
+        const wl = minLen + r() * (maxLen - minLen);
+        widths.push(wl);
+        sum += wl;
       }
+      const k = len / sum;
+      const pts: Pt[] = [];
+      let u0 = 0;
+      for (const wRaw of widths) {
+        const tw2 = Math.max(wRaw * k, rc * 2.02);
+        const cRc = Math.min(rc, tw2 / 2);
+        for (let i = 0; i <= ARC_SEG; i++) {
+          const ang = Math.PI - (Math.PI / 2) * (i / ARC_SEG);
+          pts.push(toXY(u0 + cRc + Math.cos(ang) * cRc, Math.sin(ang) * cRc));
+        }
+        pts.push(toXY(u0 + tw2 - cRc, hgt));
+        for (let i = 0; i <= ARC_SEG; i++) {
+          const ang = Math.PI / 2 - (Math.PI / 2) * (i / ARC_SEG);
+          pts.push(toXY(u0 + tw2 - cRc + Math.cos(ang) * cRc, Math.sin(ang) * cRc));
+        }
+        u0 += tw2;
+      }
+      return pts;
     };
-    edge({ x: inset, y: inset }, { x: inset + iw, y: inset });
-    edge({ x: inset + iw, y: inset }, { x: inset + iw, y: inset + ih });
-    edge({ x: inset + iw, y: inset + ih }, { x: inset, y: inset + ih });
-    edge({ x: inset, y: inset + ih }, { x: inset, y: inset });
-    let d = `M ${stations[0].x.toFixed(1)} ${stations[0].y.toFixed(1)}`;
-    for (let i = 1; i <= stations.length; i++) {
-      const q = stations[i % stations.length];
-      const prev = stations[i - 1];
-      const seg = Math.hypot(q.x - prev.x, q.y - prev.y);
-      // well over half the chord → wide, shallow, round-cornered lobes
-      const rad = (seg / 2) * (F_MIN + r() * 0.5);
-      d += ` A ${rad.toFixed(1)} ${rad.toFixed(1)} 0 0 1 ${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
-    }
+    const corners: Pt[] = [
+      { x: inset, y: inset },
+      { x: inset + iw, y: inset },
+      { x: inset + iw, y: inset + ih },
+      { x: inset, y: inset + ih },
+    ];
+    const normals: Pt[] = [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }];
+    let all: Pt[] = [];
+    for (let i = 0; i < 4; i++) all = all.concat(edgeTabs(corners[i], corners[(i + 1) % 4], normals[i]));
+    let d = `M ${all[0].x.toFixed(1)} ${all[0].y.toFixed(1)}`;
+    for (let i = 1; i < all.length; i++) d += ` L ${all[i].x.toFixed(1)} ${all[i].y.toFixed(1)}`;
     return { d: d + " Z" };
   }
 

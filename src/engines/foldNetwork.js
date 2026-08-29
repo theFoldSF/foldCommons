@@ -122,6 +122,24 @@ function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
 
   for (const q of pts)
     out += `<text x="${round(q.x)}" y="${round(q.y)}" font-family="'Fira Code', ui-monospace, monospace" font-weight="500" font-size="${round(q.fs)}" fill="${ink}" text-anchor="middle" dominant-baseline="central">${q.ch}</text>`;
+
+  // "the" — a small mark pinned top-left of the cluster's bounding box, like a
+  // TM symbol mirrored to the top-left corner. Added last, after the letters
+  // are placed and fit-scaled, so it never enters the collision/fit math and
+  // can slightly overhang the cluster — but it's clamped to stay in the tile.
+  let bx0 = 1e9, by0 = 1e9;
+  let avgFs = 0;
+  for (const q of pts) {
+    bx0 = Math.min(bx0, q.x - q.fs * 0.6);
+    by0 = Math.min(by0, q.y - q.fs * 0.6);
+    avgFs += q.fs;
+  }
+  avgFs /= pts.length;
+  const theFs = avgFs * 0.38;
+  const tx = Math.max(x0 + theFs * 2, bx0 - theFs * 0.15);
+  const ty = Math.max(y0 + theFs * 0.6, by0 + theFs * 0.1);
+  out += `<text x="${round(tx)}" y="${round(ty)}" text-anchor="end" dominant-baseline="middle" font-family="'Fira Code', ui-monospace, monospace" font-weight="500" font-size="${round(theFs)}" fill="${ink}" fill-opacity="0.85">the</text>`;
+
   return out;
 }
 
@@ -193,6 +211,11 @@ function ridges(pts, r, box, ink, lw) {
   const { x0, y0, tw, th } = box;
   const inBox = (x, y) =>
     x > x0 + tw * 0.03 && x < x0 + tw * 0.97 && y > y0 + th * 0.03 && y < y0 + th * 0.97;
+  // ridges should read as short seams between neighbours, not full-canvas
+  // rules — cap each ridge's reach from the pair midpoint to a multiple of
+  // the letters' mean size, on top of the inBox/nearest-pair trims below.
+  const meanFs = pts.reduce((a, q) => a + q.fs, 0) / pts.length;
+  const maxReach = meanFs * 2.2;
   let out = "";
   for (let i = 0; i < pts.length; i++)
     for (let j = i + 1; j < pts.length; j++) {
@@ -208,8 +231,10 @@ function ridges(pts, r, box, ink, lw) {
         run = [];
       };
       for (let s = -1; s <= 1; s += 0.02) {
-        const x = mx + px * s * L * 0.6;
-        const y = my + py * s * L * 0.6;
+        const reach = s * L * 0.6;
+        if (Math.abs(reach) > maxReach) { flush(); continue; }
+        const x = mx + px * reach;
+        const y = my + py * reach;
         if (!inBox(x, y)) { flush(); continue; }
         // keep only where {i,j} are the two nearest letters
         const ds = pts.map((q) => Math.hypot(q.x - x, q.y - y));

@@ -1,8 +1,8 @@
 // scope.js — the oscilloscope from the brand studio, distilled to its
 // Lissajous traces. A sine pair pushed through a West-Coast triangle
-// wavefolder draws looping figures; echo copies at shifted phase give the
-// phosphor-persistence read, as a pen-plotter trace in the accent color.
-// Deterministic SVG.
+// wavefolder draws looping figures; the trace blooms with a phosphor glow —
+// the same path stacked wide-and-faint to crisp-and-bright — as a pen-plotter
+// trace with a CRT bloom, in the accent color. Deterministic SVG.
 import { rng, smoothPath, round } from "./util.js";
 
 const TAU = Math.PI * 2;
@@ -11,13 +11,12 @@ export default {
   id: "scope",
   label: "Oscilloscope",
   blurb:
-    "Lissajous figures through a wavefolder — the mathematical signature of time, drawn as a pen-plotter trace with phosphor echoes.",
+    "Lissajous figures through a wavefolder — the mathematical signature of time, drawn as a pen-plotter trace with a phosphor glow.",
   params: [
     { key: "ratio", label: "XY ratio", min: 1, max: 5, step: 0.5, default: 2 },
     { key: "fold", label: "Wavefold", min: 1, max: 5, step: 0.05, default: 2.2 },
     { key: "sym", label: "Symmetry", min: -1, max: 1, step: 0.01, default: 0 },
     { key: "turns", label: "Turns", min: 1, max: 6, step: 1, default: 3 },
-    { key: "echo", label: "Echoes", min: 0, max: 5, step: 1, default: 2 },
     { key: "weight", label: "Trace weight", min: 0.6, max: 3, step: 0.05, default: 1.4 },
   ],
 
@@ -51,16 +50,13 @@ export default {
       return smoothPath(pts, { tension: 0.5 });
     };
 
-    let out = "";
-    // phosphor echoes: earlier sweeps at drifted phase and drive, fading out
-    const ne = Math.round(p.echo);
-    for (let k = ne; k >= 1; k--) {
-      const d = trace(-k * 0.16, p.fold * (1 - k * 0.045));
-      out += `<path d="${d}" fill="none" stroke="${accent}" stroke-width="${round(p.weight * U * 2)}" stroke-opacity="${round(0.3 / (k + 0.6))}" stroke-linecap="round"/>`;
-    }
     const d = trace(0, p.fold);
-    // soft ink-wash underlay + crisp pen line (the plotter register)
-    out += `<path d="${d}" fill="none" stroke="${accent}" stroke-width="${round(p.weight * U * 6)}" stroke-opacity="0.16" stroke-linecap="round"/>`;
+    let out = "";
+    // phosphor glow: the same trace stacked wide-to-narrow at falling
+    // opacity, so it blooms like a CRT beam on paper, then the crisp pen line
+    const glow = [[10, 0.06], [6, 0.1], [3.2, 0.2]];
+    for (const [mul, op] of glow)
+      out += `<path d="${d}" fill="none" stroke="${accent}" stroke-width="${round(p.weight * U * mul)}" stroke-opacity="${op}" stroke-linecap="round"/>`;
     out += `<path d="${d}" fill="none" stroke="${accent}" stroke-width="${round(p.weight * U * 2.2)}" stroke-opacity="0.95" stroke-linecap="round"/>`;
     // the beam node
     const bx = midX + ampX * shape(Math.sin(phase0), p.fold);

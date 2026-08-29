@@ -70,7 +70,7 @@ export const TEMPLATES: Template[] = [
     allowRegisterSwitch: true,
     composed: true,
     comp: { margin: 64, titleSize: 52, detailSize: 26, chipSize: 24, logoH: 34 },
-    zones: composedZones("Salon Night"),
+    zones: composedZones("Friday Aperitivo"),
     wordmark: { x: 425, y: 1042, size: 20, align: "middle" },
   },
   {
@@ -84,7 +84,7 @@ export const TEMPLATES: Template[] = [
     allowRegisterSwitch: true,
     composed: true,
     comp: { margin: 80, titleSize: 64, detailSize: 32, chipSize: 30, logoH: 42 },
-    zones: composedZones("Salon Night"),
+    zones: composedZones("Friday Aperitivo"),
     wordmark: { x: 540, y: 1280, size: 26, align: "middle" },
   },
   {
@@ -98,7 +98,7 @@ export const TEMPLATES: Template[] = [
     allowRegisterSwitch: true,
     composed: true,
     comp: { margin: 90, titleSize: 72, detailSize: 36, chipSize: 32, logoH: 48 },
-    zones: composedZones("Open Studio"),
+    zones: composedZones("Friday Aperitivo"),
     wordmark: { x: 540, y: 1800, size: 30, align: "middle" },
   },
   {
@@ -112,7 +112,7 @@ export const TEMPLATES: Template[] = [
     allowRegisterSwitch: true,
     composed: true,
     comp: { margin: 76, titleSize: 60, detailSize: 32, chipSize: 30, logoH: 42 },
-    zones: composedZones("Tantric Flute Night"),
+    zones: composedZones("Friday Aperitivo"),
     wordmark: { x: 980, y: 1010, size: 24, align: "end" },
   },
   {

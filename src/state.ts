@@ -50,6 +50,20 @@ export interface SigState {
   params: Record<string, number>;
 }
 
+// Per-element free transform (Photoshop-style): translate in canvas units,
+// uniform scale, rotation in degrees. Pivots on the element's own untransformed
+// center. Identity when absent.
+export interface XfState {
+  dx: number;
+  dy: number;
+  s: number;
+  rot: number;
+}
+
+// The composed layout's transformable elements — keys into comp.xf.
+export const XF_KEYS = ["photo", "prose", "title", "date", "time", "sig"] as const;
+export type XfKey = (typeof XF_KEYS)[number];
+
 export interface CompState {
   layout: LayoutKey;
   frame: string; // frame shape id
@@ -61,6 +75,7 @@ export interface CompState {
   panelAccent: number; // panel fill / photo-less hero fill
   sig: SigState; // the F·O·L·D net signature mark
   chipAccents: [number, number]; // date chip, time chip
+  xf: Partial<Record<XfKey, XfState>>; // per-element free transform, keyed by XF_KEYS
 }
 
 export interface Doc {
@@ -93,7 +108,7 @@ export function newDoc(templateId: string): Doc {
   const fields: Record<string, string> = {};
   for (const z of t.zones) fields[z.id] = z.default;
   if (t.composed) {
-    fields.title = fields.title ?? "Tantric Flute Night";
+    fields.title = fields.title ?? "Friday Aperitivo";
     fields.detail = fields.detail ?? "";
     fields.date = fields.date ?? "Thurs Jul 2";
     fields.time = fields.time ?? "9pm";
@@ -117,6 +132,7 @@ export function newDoc(templateId: string): Doc {
       panelAccent: 0,
       sig: { seed: 7, params: defaultSigParams() },
       chipAccents: [0, 2],
+      xf: {},
     },
     motif: t.composed || t.motifSlot
       ? { engine: engine.id, seed: 1234, params: defaultParams(engine), accents: [4, 0] }
@@ -168,7 +184,12 @@ export function shuffleComp(doc: Doc) {
     ? ["hero", "hero", "backdrop", "collage", "motif", "panel"]
     : ["panel", "motif", "motif", "hero"];
   doc.comp.layout = pick(layouts);
-  doc.comp.frame = pick(FRAMES).id;
+  // pick the motif engine before the frame, so a drape-heavy motif (Drape
+  // lines, Draped quilt) can exclude the Drape frame — no drape-on-drape.
+  const engine = pick(ENGINES);
+  const frameChoices =
+    engine.id === "flow" || engine.id === "cloth" ? FRAMES.filter((f) => f.id !== "drape") : FRAMES;
+  doc.comp.frame = pick(frameChoices).id;
   doc.comp.frameSeed = Math.floor(Math.random() * 100000);
   // background texture: collage always gets one; other layouts sometimes
   if (PHOTOS.length && (doc.comp.layout === "collage" || Math.random() < 0.35)) {
@@ -179,10 +200,10 @@ export function shuffleComp(doc: Doc) {
   doc.comp.panelAccent = Math.floor(Math.random() * 4);
   doc.comp.sig.seed = Math.floor(Math.random() * 100000);
   doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
+  doc.comp.xf = {};
   doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
   doc.register = docGround(doc).register;
   // a different motif engine each roll, params drawn from curated ranges
-  const engine = pick(ENGINES);
   doc.motif = {
     engine: engine.id,
     seed: Math.floor(Math.random() * 100000),
@@ -241,6 +262,23 @@ export function sanitize(doc: Doc): Doc {
     Number.isFinite(ca?.[0]) ? Math.round(ca[0]) : 0,
     Number.isFinite(ca?.[1]) ? Math.round(ca[1]) : 2,
   ];
+  // transform tool: clamp dx/dy to the canvas size, s to [0.3,3], rot to
+  // [-180,180]; unknown keys are dropped so hand-edited links can't escape.
+  const rawXf = (doc.comp as unknown as { xf?: Record<string, Partial<XfState>> }).xf;
+  const cleanXf: Partial<Record<XfKey, XfState>> = {};
+  for (const k of XF_KEYS) {
+    const v = rawXf?.[k];
+    if (!v || typeof v !== "object") continue;
+    const dx = Number(v.dx), dy = Number(v.dy), s = Number(v.s), rot = Number(v.rot);
+    if (![dx, dy, s, rot].some(Number.isFinite)) continue;
+    cleanXf[k] = {
+      dx: Number.isFinite(dx) ? Math.max(-t.w, Math.min(t.w, dx)) : 0,
+      dy: Number.isFinite(dy) ? Math.max(-t.h, Math.min(t.h, dy)) : 0,
+      s: Number.isFinite(s) ? Math.max(0.3, Math.min(3, s)) : 1,
+      rot: Number.isFinite(rot) ? Math.max(-180, Math.min(180, rot)) : 0,
+    };
+  }
+  doc.comp.xf = cleanXf;
   doc.fields = { ...fresh.fields, ...(doc.fields ?? {}) };
   // pre-prose docs kept a short "detail" line — carry it into the prose card
   if (!doc.fields.prose?.trim() && doc.fields.detail?.trim())

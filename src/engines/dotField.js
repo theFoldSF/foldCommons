@@ -66,24 +66,26 @@ export default {
     const blobCenters = [];
     for (let k = 0; k < Math.round(p.blobs); k++) {
       const big = r() < 0.6;
-      const cx = w * (0.18 + r() * 0.64);
-      const cy = h * (0.18 + r() * 0.64);
-      const R = Math.min(w, h) * (big ? 0.22 + r() * 0.16 : 0.07 + r() * 0.06);
+      let R = Math.min(w, h) * (big ? 0.22 + r() * 0.16 : 0.07 + r() * 0.06);
       // smooth wander: the radius is a sum of two low harmonics instead of
       // independent per-vertex noise, so the contour flows instead of jagging
       const a1 = (0.08 + 0.3 * p.wobble) * (0.5 + r() * 0.5);
       const a2 = (0.05 + 0.22 * p.wobble) * (0.5 + r() * 0.5);
       const f1 = 2, f2 = 3 + Math.floor(r() * 2);
       const ph1 = r() * TAU, ph2 = r() * TAU;
+      // bound by construction: shrink R (if the blob simply can't fit) and
+      // clamp the CENTER — never the vertices — so the curve stays whole
+      let maxR = R * (1 + a1 + a2);
+      const capR = Math.min(w, h) * 0.48;
+      if (maxR > capR) { R *= capR / maxR; maxR = capR; }
+      const cx = clamp(w * (0.18 + r() * 0.64), w * 0.02 + maxR, w * 0.98 - maxR);
+      const cy = clamp(h * (0.18 + r() * 0.64), h * 0.02 + maxR, h * 0.98 - maxR);
       const n = 30;
       const pts = [];
       for (let i = 0; i < n; i++) {
         const a = (i / n) * TAU;
         const rad = R * (1 + a1 * Math.sin(f1 * a + ph1) + a2 * Math.sin(f2 * a + ph2));
-        pts.push({
-          x: clamp(cx + Math.cos(a) * rad, w * 0.02, w * 0.98),
-          y: clamp(cy + Math.sin(a) * rad, h * 0.02, h * 0.98),
-        });
+        pts.push({ x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad });
       }
       blobCenters.push([cx, cy, R]);
       out += `<path d="${smoothPath(pts, { closed: true, tension: 0.7 })}" fill="none" stroke="${accent}" stroke-width="${1.4 * U}" stroke-dasharray="${4.5 * U} ${2.6 * U}" stroke-linecap="round"/>`;
