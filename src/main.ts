@@ -15,7 +15,8 @@ import {
   type RegisterKey,
 } from "./brand/tokens";
 import { loadFonts } from "./brand/fonts";
-import { ENGINES, defaultParams, engineById } from "./engines/index";
+import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById } from "./engines/index";
+import { loadCutouts } from "./cutouts/index";
 import { FRAMES } from "./frames/index";
 import { MARKS, loadMarks } from "./marks/index";
 import { PHOTOS, loadPhotos, readUpload } from "./photos/index";
@@ -770,18 +771,36 @@ function buildAll() {
 
 buildAll();
 
-// The marks and the photo library load async from public/ — refresh whatever
-// is on screen once each lands.
+// Header logo: a fresh F·O·L·D net generation every visit — the identity is
+// the system, so the site wears a different pull from it each time. Clicking
+// it rerolls.
+function headerLogo() {
+  const wm = document.querySelector("#topbar .wordmark") as HTMLElement | null;
+  if (!wm) return;
+  const inner = SIGNATURE_ENGINE.render({
+    w: 150,
+    h: 64,
+    p: { tiles: 1, style: 3, scatter: 0.55, size: 2.2, weight: 3 },
+    colors: [],
+    ink: "#03071B",
+    ground: "none",
+    seed: Math.floor(Math.random() * 1e6),
+  });
+  wm.innerHTML = `<svg viewBox="0 0 150 64" role="img" aria-label="the Fold">${inner}</svg>`;
+  wm.style.cursor = "pointer";
+  wm.title = "Reroll the mark";
+  wm.onclick = headerLogo;
+}
+headerLogo();
+
+// The marks, photos, and sculpture cutouts load async from public/ — refresh
+// whatever is on screen once each lands.
 const refresh = () => {
   sanitize(doc);
-  // header wordmark: the chunky FOLD logotype, once its paths are loaded
-  const logo = MARKS.find((m) => m.id === "fold-logotype");
-  const wm = document.querySelector("#topbar .wordmark");
-  if (logo && wm && !wm.querySelector("svg"))
-    wm.innerHTML = `<svg viewBox="${logo.viewBox}" color="var(--ink)" role="img" aria-label="the Fold">${logo.svg}</svg>`;
   buildAll();
   if ($("#canonView").classList.contains("active")) buildCanon();
   if ($("#galleryView").classList.contains("active")) buildGallery();
 };
 loadMarks(refresh);
 loadPhotos(refresh);
+loadCutouts(refresh);

@@ -277,26 +277,32 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     return bg + win + text + bottom;
   }
 
+  // Motif layers live in a bounded, padded window — a nested svg clips them,
+  // so no engine can ever spill past the canvas or crowd the band.
+  const motifBox = (x: number, y: number, bw: number, bh: number) =>
+    `<svg x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}"
+      viewBox="0 0 ${bw.toFixed(1)} ${bh.toFixed(1)}" overflow="hidden">${motifArt(doc, bw, bh)}</svg>`;
+  const mp = m * 0.45; // motif padding off the canvas edge
+
   if (comp.layout === "motif") {
-    // full-bleed motif; the words sit right on it
-    return bg + motifArt(doc, W, H) + text + bottom;
+    // the motif runs the frame, padded off the edges; the words sit below
+    return bg + motifBox(mp, mp, W - mp * 2, heroBottom - mp * 2) + text + bottom;
   }
 
   if (comp.layout === "collage") {
-    // everything at once: texture wash, motif running the full frame, and a
+    // everything at once: texture wash, motif running the padded frame, and a
     // framed photo floating on top of both
     const pw = W * 0.68;
     const ph = Math.min(heroBottom - m * 1.8, H * 0.52);
     const px = (W - pw) / 2;
     const py = m + (heroBottom - m - ph) * 0.42;
     const photo = frameWindow(doc, px, py, pw, ph, "photo");
-    return bg + motifArt(doc, W, H) + photo + text + bottom;
+    return bg + motifBox(mp, mp, W - mp * 2, heroBottom - mp * 2) + photo + text + bottom;
   }
 
   // backdrop: motif pours across the top, the framed photo floats over it
   const motifH = H * 0.66;
-  const motif = `<svg x="0" y="0" width="${W}" height="${motifH}" viewBox="0 0 ${W} ${motifH}"
-    overflow="hidden">${motifArt(doc, W, motifH)}</svg>`;
+  const motif = motifBox(mp, mp, W - mp * 2, motifH - mp);
   const pw = W * 0.72;
   const ph = Math.min(heroBottom - m * 1.6, H * 0.5);
   const px = (W - pw) / 2;

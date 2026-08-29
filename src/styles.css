@@ -46,7 +46,7 @@ body {
   display: flex;
   align-items: center;
 }
-.wordmark svg { height: 20px; width: auto; display: block; }
+.wordmark svg { height: 30px; width: auto; display: block; }
 .app-name {
   font-family: "Fira Code", monospace;
   color: var(--ink);
@@ -88,6 +88,7 @@ body {
 }
 #leftPanel { border-right: 1px solid var(--rule); }
 #rightPanel { border-left: 1px solid var(--rule); width: 330px; }
+/* the stage is quiet: the artifact floats on plain grey, nothing else */
 #stage {
   flex: 1;
   display: flex;
@@ -95,18 +96,17 @@ body {
   justify-content: center;
   overflow: auto;
   padding: 28px;
-  background:
-    linear-gradient(var(--rule-soft) 1px, transparent 1px),
-    linear-gradient(90deg, var(--rule-soft) 1px, transparent 1px),
-    var(--warm-gray);
-  background-size: 28px 28px, 28px 28px, auto;
+  background: #dcd9d4;
 }
 #canvasWrap svg {
+  /* width:auto + height:auto lets the browser solve BOTH max constraints while
+     keeping the svg's intrinsic aspect — no letterbox gutters around the art */
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: calc(100vh - 160px);
-  height: auto;
-  box-shadow: 0 14px 44px rgba(3, 7, 27, 0.18);
-  border-radius: 6px;
+  display: block;
+  box-shadow: 0 10px 32px rgba(3, 7, 27, 0.16);
 }
 
 /* panel bits */

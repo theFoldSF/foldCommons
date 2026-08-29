@@ -59,11 +59,16 @@ function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
   const minDist = (a, b) => (a + b) * 0.58;
   rows.forEach((row, ri) => {
     let x = 0;
-    let y = (rows.length > 1 ? (ri === 0 ? -rowGap / 2 : rowGap / 2) : 0);
+    const rowBase = rows.length > 1 ? (ri === 0 ? -rowGap / 2 : rowGap / 2) : 0;
+    let y = rowBase;
     row.forEach((li, k) => {
       if (k > 0) {
         const prev = row[k - 1];
-        const dy = (r() - 0.5) * fs * 2.6 * sc;
+        // drift is a bounded walk: dips and climbs, but the run stays
+        // horizontal overall so the reading order can't tip vertical
+        const lim = fs * 1.7 * sc;
+        const off = y - rowBase;
+        const dy = Math.max(-lim - off, Math.min(lim - off, (r() - 0.5) * fs * 2.2 * sc));
         const D = minDist(fss[prev], fss[li]) + fs * (0.1 + r() * 0.9 * sc);
         // the diagonal drop buys back horizontal room, but x always advances
         const dx = Math.max(Math.sqrt(Math.max(0, D * D - dy * dy)), (fss[prev] + fss[li]) * 0.3);

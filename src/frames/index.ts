@@ -63,19 +63,27 @@ export function framePath(id: string, seed: number, w: number, h: number): { d: 
 
   if (id === "scallop") {
     // The source comps build this from overlapping rounded-corner rectangles:
-    // each edge reads as a run of big soft lobes. Drawn as outward arcs
-    // between perimeter stations — a cloud-edged rectangle.
-    const inset = m * 0.07;
+    // each edge a run of soft lobes. Quieter than a cloud edge — modest lobes,
+    // irregular widths, shallow arcs. The inset is derived from the deepest
+    // possible bulge so a lobe can never leave the slot and get clipped.
+    const lobe = m * (0.085 + r() * 0.04);
+    const F_MIN = 1.25; // shallowest radius factor → deepest bulge
+    const maxBulge = (lobe * 1.35 * 0.5) * (F_MIN - Math.sqrt(F_MIN * F_MIN - 1));
+    const inset = maxBulge + m * 0.012;
     const iw = w - inset * 2;
     const ih = h - inset * 2;
-    const target = m * 0.24; // lobe width
     const stations: Pt[] = [];
     const edge = (a: Pt, b: Pt) => {
       const len = Math.hypot(b.x - a.x, b.y - a.y);
-      const nSeg = Math.max(2, Math.round(len / target));
+      const nSeg = Math.max(2, Math.round(len / lobe));
+      // irregular lobe widths: jittered weights, normalized to span the edge
+      const wts = Array.from({ length: nSeg }, () => 0.72 + r() * 0.63);
+      const total = wts.reduce((s, v) => s + v, 0);
+      let acc = 0;
       for (let i = 0; i < nSeg; i++) {
-        const t = i / nSeg;
+        const t = acc / total;
         stations.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+        acc += wts[i];
       }
     };
     edge({ x: inset, y: inset }, { x: inset + iw, y: inset });
@@ -87,8 +95,8 @@ export function framePath(id: string, seed: number, w: number, h: number): { d: 
       const q = stations[i % stations.length];
       const prev = stations[i - 1];
       const seg = Math.hypot(q.x - prev.x, q.y - prev.y);
-      // radius a touch over half the chord → wide, shallow, round-cornered lobe
-      const rad = (seg / 2) * (1.04 + r() * 0.12);
+      // well over half the chord → wide, shallow, round-cornered lobes
+      const rad = (seg / 2) * (F_MIN + r() * 0.5);
       d += ` A ${rad.toFixed(1)} ${rad.toFixed(1)} 0 0 1 ${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
     }
     return { d: d + " Z" };

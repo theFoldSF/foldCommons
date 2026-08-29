@@ -57,7 +57,7 @@ export default {
     const nodes = [];
     for (let i = 0; i < n; i++) {
       const ang = r() * Math.PI * 2;
-      const rr = Math.sqrt(r()) * (0.4 + 0.6 * r());
+      const rr = Math.pow(r(), 0.42);
       const size = (4 + r() * 7) * U;
       const margin = size + 4 * U;
       nodes.push({

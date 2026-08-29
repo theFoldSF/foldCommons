@@ -127,7 +127,6 @@ export const TEMPLATES: Template[] = [
     zones: [
       { id: "title", label: "Title", role: "heading", x: 80, y: 96, w: 1200, size: 54, align: "start", default: "How it works", lines: 1, colorable: true },
     ],
-    line: { y: 0.16 },
     wordmark: { x: 1520, y: 950, size: 22, align: "end" },
   },
   {

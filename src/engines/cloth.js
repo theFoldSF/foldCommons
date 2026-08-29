@@ -10,6 +10,7 @@ import { rng, makeFlow, clamp, round } from "./util.js";
 const TAU = Math.PI * 2;
 
 function hex(hh) {
+  if (String(hh).startsWith("rgb")) return String(hh).match(/\d+/g).slice(0, 3).map(Number);
   const n = parseInt(String(hh).replace("#", ""), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
@@ -62,20 +63,20 @@ export default {
     // deterministic settle: gravity + a frozen seeded sway field, then a
     // few constraint passes per step — the pose the live engine drifts around
     const ph = [r() * TAU, r() * TAU, r() * TAU];
-    const STEPS = 90;
+    const STEPS = 110;
     for (let s = 0; s < STEPS; s++) {
       const t = s / STEPS;
       for (const q of pts) {
         if (q.pin) continue;
-        const vx = (q.x - q.px) * 0.96, vy = (q.y - q.py) * 0.96;
+        const vx = (q.x - q.px) * 0.9, vy = (q.y - q.py) * 0.9;
         q.px = q.x; q.py = q.y;
         const fy = (q.y - oy) / (rows * spacing);
         const swayX =
-          p.sway * spacing * 0.28 * (Math.sin(fy * 5 + ph[0]) * 0.6 + Math.sin(fy * 11 + ph[1]) * 0.4) * (1 - t * 0.6);
+          p.sway * spacing * 0.045 * (Math.sin(fy * 5 + ph[0]) * 0.6 + Math.sin(fy * 11 + ph[1]) * 0.4) * (1 - t * 0.6);
         q.x += vx + swayX;
-        q.y += vy + spacing * 0.42;
+        q.y += vy + spacing * 0.05;
       }
-      for (let pass = 0; pass < 3; pass++)
+      for (let pass = 0; pass < 4; pass++)
         for (const [a, b] of links) {
           const A = pts[a], B = pts[b];
           const dx = B.x - A.x, dy = B.y - A.y;
