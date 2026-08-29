@@ -33,6 +33,87 @@ function designerFit(id: string, w: number, h: number): { d: string; transform: 
 
 type Pt = { x: number; y: number };
 
+// Shared tab-run generator: each edge of a w×h rect gets a run of adjoining
+// rounded-rectangle tabs (quarter-arc up, flat run, quarter-arc down) of
+// varying length but uniform height `hgt` and radius `hgt`, protruding
+// outward from a baseline inset by `inset`. Used at frame scale (many small
+// tabs, soft semicircle read) and chip scale (few chunky tabs).
+function tabbedRectPath(
+  seed: number,
+  w: number,
+  h: number,
+  hgt: number,
+  inset: number,
+  minLen: number,
+  maxLen: number
+): string {
+  const rc = hgt;
+  const r = rng((seed >>> 0) * 15485863 + 31);
+  const iw = w - inset * 2;
+  const ih = h - inset * 2;
+  const ARC_SEG = 8;
+  const edgeTabs = (a: Pt, b: Pt, n: Pt): Pt[] => {
+    const ex = b.x - a.x, ey = b.y - a.y;
+    const len = Math.hypot(ex, ey);
+    const ux = ex / len, uy = ey / len;
+    const toXY = (u: number, v: number): Pt => ({ x: a.x + ux * u + n.x * v, y: a.y + uy * u + n.y * v });
+    const widths: number[] = [];
+    let sum = 0;
+    while (sum < len) {
+      const wl = minLen + r() * (maxLen - minLen);
+      widths.push(wl);
+      sum += wl;
+    }
+    const k = len / sum;
+    const pts: Pt[] = [];
+    let u0 = 0;
+    for (const wRaw of widths) {
+      const tw2 = Math.max(wRaw * k, rc * 2.02);
+      const cRc = Math.min(rc, tw2 / 2);
+      for (let i = 0; i <= ARC_SEG; i++) {
+        const ang = Math.PI - (Math.PI / 2) * (i / ARC_SEG);
+        pts.push(toXY(u0 + cRc + Math.cos(ang) * cRc, Math.sin(ang) * cRc));
+      }
+      pts.push(toXY(u0 + tw2 - cRc, hgt));
+      for (let i = 0; i <= ARC_SEG; i++) {
+        const ang = Math.PI / 2 - (Math.PI / 2) * (i / ARC_SEG);
+        pts.push(toXY(u0 + tw2 - cRc + Math.cos(ang) * cRc, Math.sin(ang) * cRc));
+      }
+      u0 += tw2;
+    }
+    return pts;
+  };
+  const corners: Pt[] = [
+    { x: inset, y: inset },
+    { x: inset + iw, y: inset },
+    { x: inset + iw, y: inset + ih },
+    { x: inset, y: inset + ih },
+  ];
+  const normals: Pt[] = [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }];
+  let all: Pt[] = [];
+  for (let i = 0; i < 4; i++) all = all.concat(edgeTabs(corners[i], corners[(i + 1) % 4], normals[i]));
+  let d = `M ${all[0].x.toFixed(1)} ${all[0].y.toFixed(1)}`;
+  for (let i = 1; i < all.length; i++) d += ` L ${all[i].x.toFixed(1)} ${all[i].y.toFixed(1)}`;
+  return d + " Z";
+}
+
+// Chip-scale scallop: a "bumpy cloud rectangle" — a couple of fat, soft tabs
+// per edge instead of many small ones, large radius, but modest — sticks out
+// just a little past the chip's own w×h box, not a big bloom. Used by
+// chipSvg's "scallop" chip style and by the diagram's "scallop" node style.
+const SCALLOP_CHIP_HGT = 0.16, SCALLOP_CHIP_INSET = 0.09;
+
+export function scallopChipPath(seed: number, w: number, h: number): string {
+  return tabbedRectPath(seed, w, h, h * SCALLOP_CHIP_HGT, h * SCALLOP_CHIP_INSET, h * 0.5, h * 1.7);
+}
+
+// How far a chip-scale scallop's tabs reach past the nominal w×h box —
+// callers space adjoining scallop chips apart by (at least) twice this so
+// their bumps don't collide.
+export function scallopChipProtrusion(h: number): number {
+  return h * (SCALLOP_CHIP_HGT - SCALLOP_CHIP_INSET);
+}
+
 // Walk a rect perimeter at roughly even spacing, returning points plus each
 // point's outward normal — the generators displace along the normal.
 function perimeter(w: number, h: number, step: number): { p: Pt; n: Pt; corner: boolean }[] {
@@ -68,58 +149,23 @@ export function framePath(id: string, seed: number, w: number, h: number): { d: 
     // down, immediately into the next tab — a run of adjoining bumps, not
     // circular scallops. Corner radius equals the tab height, so the arc
     // alone carries the baseline up to the top run with no vertical wall.
-    const hgt = m * 0.045;
-    const rc = hgt;
+    // Tuned so a ~1000px frame reads as ~6-9 soft lobes per edge.
+    const hgt = m * 0.032;
+    const minLen = m * 0.09, maxLen = m * 0.16;
+    // A slight seeded tilt (±3°) from the frame seed, keeps the piece from
+    // reading too rigid. The tabbed shape is generated in a box shrunk just
+    // enough that its rotated bounding box still fits the original w×h slot
+    // — the tilt can never clip at the slot edges.
+    const tilt = (r() - 0.5) * 6;
+    const rad = (Math.abs(tilt) * Math.PI) / 180;
+    const cosA = Math.cos(rad), sinA = Math.sin(rad);
+    const shrink = Math.min(1, w / (w * cosA + h * sinA), h / (w * sinA + h * cosA));
+    const bw = w * shrink, bh = h * shrink;
     const inset = hgt + m * 0.012;
-    const iw = w - inset * 2;
-    const ih = h - inset * 2;
-    const minLen = m * 0.1, maxLen = m * 0.22;
-    const ARC_SEG = 8;
-    // one edge's tabs, in a local (u = along edge, v = outward) frame
-    const edgeTabs = (a: Pt, b: Pt, n: Pt): Pt[] => {
-      const ex = b.x - a.x, ey = b.y - a.y;
-      const len = Math.hypot(ex, ey);
-      const ux = ex / len, uy = ey / len;
-      const toXY = (u: number, v: number): Pt => ({ x: a.x + ux * u + n.x * v, y: a.y + uy * u + n.y * v });
-      // jittered tab widths, normalized to fill the edge exactly
-      const widths: number[] = [];
-      let sum = 0;
-      while (sum < len) {
-        const wl = minLen + r() * (maxLen - minLen);
-        widths.push(wl);
-        sum += wl;
-      }
-      const k = len / sum;
-      const pts: Pt[] = [];
-      let u0 = 0;
-      for (const wRaw of widths) {
-        const tw2 = Math.max(wRaw * k, rc * 2.02);
-        const cRc = Math.min(rc, tw2 / 2);
-        for (let i = 0; i <= ARC_SEG; i++) {
-          const ang = Math.PI - (Math.PI / 2) * (i / ARC_SEG);
-          pts.push(toXY(u0 + cRc + Math.cos(ang) * cRc, Math.sin(ang) * cRc));
-        }
-        pts.push(toXY(u0 + tw2 - cRc, hgt));
-        for (let i = 0; i <= ARC_SEG; i++) {
-          const ang = Math.PI / 2 - (Math.PI / 2) * (i / ARC_SEG);
-          pts.push(toXY(u0 + tw2 - cRc + Math.cos(ang) * cRc, Math.sin(ang) * cRc));
-        }
-        u0 += tw2;
-      }
-      return pts;
-    };
-    const corners: Pt[] = [
-      { x: inset, y: inset },
-      { x: inset + iw, y: inset },
-      { x: inset + iw, y: inset + ih },
-      { x: inset, y: inset + ih },
-    ];
-    const normals: Pt[] = [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }];
-    let all: Pt[] = [];
-    for (let i = 0; i < 4; i++) all = all.concat(edgeTabs(corners[i], corners[(i + 1) % 4], normals[i]));
-    let d = `M ${all[0].x.toFixed(1)} ${all[0].y.toFixed(1)}`;
-    for (let i = 1; i < all.length; i++) d += ` L ${all[i].x.toFixed(1)} ${all[i].y.toFixed(1)}`;
-    return { d: d + " Z" };
+    const d = tabbedRectPath(seed, bw, bh, hgt, inset, minLen, maxLen);
+    const ox = (w - bw) / 2, oy = (h - bh) / 2;
+    const transform = `translate(${ox.toFixed(2)} ${oy.toFixed(2)}) rotate(${tilt.toFixed(2)} ${(bw / 2).toFixed(2)} ${(bh / 2).toFixed(2)})`;
+    return { d, transform };
   }
 
   if (id === "swoop") {

@@ -255,7 +255,8 @@ button.mini:hover { border-color: var(--ink); }
 .g-card .thumb svg { width: 100%; height: auto; }
 .g-card .meta { padding: 10px 12px; }
 .g-card .meta .n { font-weight: 600; font-size: 14.5px; }
-.g-card .meta .d { font-size: 11px; opacity: 0.55; font-family: "Fira Code", monospace; }
+.g-card .meta .mk { font-size: 12px; opacity: 0.7; margin-top: 1px; }
+.g-card .meta .d { font-size: 11px; opacity: 0.55; font-family: "Fira Code", monospace; margin-top: 2px; }
 .g-card .meta .row { margin-top: 8px; }
 .g-empty { opacity: 0.65; font-size: 15px; max-width: 460px; line-height: 1.6; }
 
@@ -367,3 +368,32 @@ button.mini:hover { border-color: var(--ink); }
   cursor: pointer;
   user-select: none;
 }
+
+/* --- save-to-gallery modal --------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 27, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-card {
+  background: var(--cream);
+  border: 1.5px solid var(--ink);
+  border-radius: 16px;
+  box-shadow: 6px 6px 0 var(--ink);
+  padding: 24px;
+  width: 340px;
+  max-width: calc(100vw - 40px);
+}
+.modal-title {
+  font-family: "Figtree", sans-serif;
+  font-weight: 800;
+  font-size: 17px;
+  margin-bottom: 16px;
+  color: var(--ink);
+}
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
+.modal-actions button.act { width: auto; margin-bottom: 0; padding: 10px 18px; }

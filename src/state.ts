@@ -22,10 +22,15 @@ export interface DiagramNode {
   accent: number;
 }
 
+export type DiagramDir = "lr" | "tb" | "scatter";
+export type NodeStyle = "ticket" | "scallop" | "plain";
+
 export interface DiagramState {
   nodes: DiagramNode[];
   edges: [number, number][];
-  dir: "lr" | "tb";
+  dir: DiagramDir;
+  nodeStyle: NodeStyle;
+  scatterSeed: number;
 }
 
 // The composed layouts (poster / story / post): what the frame holds and
@@ -61,8 +66,32 @@ export interface XfState {
 }
 
 // The composed layout's transformable elements — keys into comp.xf.
-export const XF_KEYS = ["photo", "prose", "title", "date", "time", "sig"] as const;
+export const XF_KEYS = ["photo", "motif", "prose", "title", "date", "time", "sig"] as const;
 export type XfKey = (typeof XF_KEYS)[number];
+
+// Horizontal-movement variants for backdrop/collage: which corner (or side)
+// the motif box leans into, and which corner the photo frame anchors toward —
+// deliberately asymmetric, never simply stacked/centered. "center" is the
+// legacy centered pairing (kept as index 0 so old share links render close to
+// how they always did). Index = comp.arrange, seeded fraction sizes/photo
+// aspect come from frameSeed so the same doc always re-draws identically.
+export interface ArrangeVariant {
+  motif: "full" | "tl" | "tr" | "bl" | "br";
+  photo: "center" | "tl" | "tr" | "bl" | "br";
+}
+export const ARRANGEMENTS: ArrangeVariant[] = [
+  { motif: "full", photo: "center" }, // 0: classic centered stack
+  { motif: "tl", photo: "br" },
+  { motif: "tr", photo: "bl" },
+  { motif: "bl", photo: "tr" },
+  { motif: "br", photo: "tl" },
+  { motif: "full", photo: "tl" }, // deliberate overlap
+  { motif: "full", photo: "br" }, // deliberate overlap
+  { motif: "tl", photo: "center" }, // off-center single: motif accents a corner, photo dominates
+];
+
+export type ChipStyle = "ticket" | "scallop" | "line";
+export type WordsLayout = "band" | "corners" | "stack";
 
 export interface CompState {
   layout: LayoutKey;
@@ -75,6 +104,9 @@ export interface CompState {
   panelAccent: number; // panel fill / photo-less hero fill
   sig: SigState; // the F·O·L·D net signature mark
   chipAccents: [number, number]; // date chip, time chip
+  chipStyle: ChipStyle;
+  words: WordsLayout;
+  arrange: number; // index into ARRANGEMENTS — used by backdrop/collage
   xf: Partial<Record<XfKey, XfState>>; // per-element free transform, keyed by XF_KEYS
 }
 
@@ -132,6 +164,9 @@ export function newDoc(templateId: string): Doc {
       panelAccent: 0,
       sig: { seed: 7, params: defaultSigParams() },
       chipAccents: [0, 2],
+      chipStyle: "ticket",
+      words: "band",
+      arrange: 0,
       xf: {},
     },
     motif: t.composed || t.motifSlot
@@ -154,6 +189,8 @@ export function newDoc(templateId: string): Doc {
         [1, 2],
       ],
       dir: "lr",
+      nodeStyle: "ticket",
+      scatterSeed: 101,
     },
     stickers: { ids: MARKS.slice(0, 4).map((m) => m.id), accent: 0 },
   };
@@ -200,6 +237,9 @@ export function shuffleComp(doc: Doc) {
   doc.comp.panelAccent = Math.floor(Math.random() * 4);
   doc.comp.sig.seed = Math.floor(Math.random() * 100000);
   doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
+  doc.comp.chipStyle = pick<ChipStyle>(["ticket", "scallop", "line"]);
+  doc.comp.words = pick<WordsLayout>(["band", "corners", "stack"]);
+  doc.comp.arrange = Math.floor(Math.random() * ARRANGEMENTS.length);
   doc.comp.xf = {};
   doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
   doc.register = docGround(doc).register;
@@ -262,6 +302,11 @@ export function sanitize(doc: Doc): Doc {
     Number.isFinite(ca?.[0]) ? Math.round(ca[0]) : 0,
     Number.isFinite(ca?.[1]) ? Math.round(ca[1]) : 2,
   ];
+  if (!["ticket", "scallop", "line"].includes(doc.comp.chipStyle)) doc.comp.chipStyle = "ticket";
+  if (!["band", "corners", "stack"].includes(doc.comp.words)) doc.comp.words = "band";
+  doc.comp.arrange = Number.isFinite(doc.comp.arrange)
+    ? ((Math.round(doc.comp.arrange) % ARRANGEMENTS.length) + ARRANGEMENTS.length) % ARRANGEMENTS.length
+    : 0;
   // transform tool: clamp dx/dy to the canvas size, s to [0.3,3], rot to
   // [-180,180]; unknown keys are dropped so hand-edited links can't escape.
   const rawXf = (doc.comp as unknown as { xf?: Record<string, Partial<XfState>> }).xf;
@@ -306,6 +351,14 @@ export function sanitize(doc: Doc): Doc {
     doc.stickers.ids = doc.stickers.ids.filter((id) => MARKS.some((m) => m.id === id));
     if (!doc.stickers.ids.length) doc.stickers.ids = [MARKS[0].id];
   }
+  // diagram: fill/clamp fields added after v2's first ship (dir gained
+  // "scatter", node styling, a scatter-only reroll seed)
+  if (!doc.diagram || typeof doc.diagram !== "object") doc.diagram = fresh.diagram;
+  if (!Array.isArray(doc.diagram.nodes)) doc.diagram.nodes = fresh.diagram.nodes;
+  if (!Array.isArray(doc.diagram.edges)) doc.diagram.edges = fresh.diagram.edges;
+  if (!["lr", "tb", "scatter"].includes(doc.diagram.dir)) doc.diagram.dir = "lr";
+  if (!["ticket", "scallop", "plain"].includes(doc.diagram.nodeStyle)) doc.diagram.nodeStyle = "ticket";
+  doc.diagram.scatterSeed = Number.isFinite(doc.diagram.scatterSeed) ? doc.diagram.scatterSeed >>> 0 : 101;
   return doc;
 }
 
@@ -334,6 +387,7 @@ export function decodeDoc(s: string): Doc | null {
 export interface GalleryItem {
   id: string;
   name: string;
+  maker?: string;
   date: string;
   doc: Doc;
 }
@@ -348,11 +402,12 @@ export function loadGallery(): GalleryItem[] {
   }
 }
 
-export function saveToGallery(doc: Doc, name: string): GalleryItem {
+export function saveToGallery(doc: Doc, name: string, maker?: string): GalleryItem {
   const items = loadGallery();
   const item: GalleryItem = {
     id: Math.random().toString(36).slice(2, 10),
     name,
+    maker: maker?.trim() || undefined,
     date: new Date().toISOString().slice(0, 10),
     doc: JSON.parse(JSON.stringify(doc)),
   };

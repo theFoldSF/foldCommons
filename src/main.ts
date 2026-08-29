@@ -23,6 +23,7 @@ import { PHOTOS, loadPhotos, readUpload } from "./photos/index";
 import { TEMPLATES } from "./templates/index";
 import { renderDoc } from "./render";
 import {
+  ARRANGEMENTS,
   BG_FADE,
   LAYOUTS,
   SIG_PARAMS,
@@ -37,10 +38,16 @@ import {
   sanitize,
   saveToGallery,
   shuffleComp,
+  type ChipStyle,
   type Doc,
+  type WordsLayout,
   type XfKey,
   type XfState,
 } from "./state";
+
+// Friendly labels for ARRANGEMENTS, same order/length as state.ts's list.
+const ARRANGE_LABELS = ["Centered", "↖ / ↘", "↗ / ↙", "↙ / ↗", "↘ / ↖", "Overlap ↖", "Overlap ↘", "Off-center"];
+if (ARRANGE_LABELS.length !== ARRANGEMENTS.length) throw new Error("ARRANGE_LABELS out of sync with ARRANGEMENTS");
 import { exportPng, exportSvg } from "./export";
 
 loadFonts();
@@ -137,9 +144,6 @@ function buildLeft() {
     gchips.appendChild(c);
   });
   leftPanel.appendChild(gchips);
-  leftPanel.appendChild(
-    h(`<div class="note">Any canon color can carry the whole piece — the ink adjusts itself.</div>`)
-  );
 
   if (!docTemplate(doc).composed) {
     leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
@@ -160,11 +164,6 @@ function buildLeft() {
       h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
     );
   }
-
-  leftPanel.appendChild(
-    h(`<div class="note">Everything here draws from the canon — palettes, faces, and motifs
-      from the brand brief. Compose freely; it can't go off-brand.</div>`)
-  );
 }
 
 // --- right panel: contextual controls ---------------------------------------
@@ -227,6 +226,22 @@ function compControls(into: HTMLElement) {
         renderCanvas();
       })
     );
+    into.appendChild(f);
+  }
+
+  if (doc.comp.layout === "backdrop" || doc.comp.layout === "collage") {
+    const f = h(`<div class="field"><label>Arrange</label></div>`);
+    const aseg = h(`<div class="seg wrap"></div>`);
+    ARRANGE_LABELS.forEach((label, i) => {
+      const b = h(`<button class="${doc.comp.arrange === i ? "active" : ""}">${label}</button>`);
+      b.onclick = () => {
+        doc.comp.arrange = i;
+        buildRight();
+        renderCanvas();
+      };
+      aseg.appendChild(b);
+    });
+    f.appendChild(aseg);
     into.appendChild(f);
   }
 }
@@ -355,6 +370,45 @@ function sigControls(into: HTMLElement) {
 function composedWordControls(into: HTMLElement) {
   const t = docTemplate(doc);
   into.appendChild(h(`<h3 class="panel-title">Words</h3>`));
+
+  const wordsDefs: { key: WordsLayout; label: string }[] = [
+    { key: "band", label: "Band" },
+    { key: "corners", label: "Corners" },
+    { key: "stack", label: "Stack" },
+  ];
+  const wf = h(`<div class="field"><label>Layout</label></div>`);
+  const wseg = h(`<div class="seg"></div>`);
+  for (const w of wordsDefs) {
+    const b = h(`<button class="${doc.comp.words === w.key ? "active" : ""}">${w.label}</button>`);
+    b.onclick = () => {
+      doc.comp.words = w.key;
+      buildRight();
+      renderCanvas();
+    };
+    wseg.appendChild(b);
+  }
+  wf.appendChild(wseg);
+  into.appendChild(wf);
+
+  const chipDefs: { key: ChipStyle; label: string }[] = [
+    { key: "ticket", label: "Ticket" },
+    { key: "scallop", label: "Scallop" },
+    { key: "line", label: "Line" },
+  ];
+  const cf = h(`<div class="field"><label>Chip style</label></div>`);
+  const cseg = h(`<div class="seg"></div>`);
+  for (const cs of chipDefs) {
+    const b = h(`<button class="${doc.comp.chipStyle === cs.key ? "active" : ""}">${cs.label}</button>`);
+    b.onclick = () => {
+      doc.comp.chipStyle = cs.key;
+      buildRight();
+      renderCanvas();
+    };
+    cseg.appendChild(b);
+  }
+  cf.appendChild(cseg);
+  into.appendChild(cf);
+
   const fields: { id: string; label: string; chip?: 0 | 1; multi?: boolean }[] = [
     { id: "title", label: "Title" },
     { id: "prose", label: "Prose (optional — gets its own framed card)", multi: true },
@@ -565,13 +619,34 @@ function diagramControls(into: HTMLElement) {
   into.appendChild(addE);
 
   into.appendChild(h(`<h3 class="panel-title">Flow</h3>`));
-  const seg = h(`<div class="seg">
+  const seg = h(`<div class="seg wrap">
     <button class="${d.dir === "lr" ? "active" : ""}">Left → right</button>
-    <button class="${d.dir === "tb" ? "active" : ""}">Top ↓ bottom</button></div>`);
-  const [lr, tb] = seg.querySelectorAll("button");
+    <button class="${d.dir === "tb" ? "active" : ""}">Top ↓ bottom</button>
+    <button class="${d.dir === "scatter" ? "active" : ""}">Scatter</button></div>`);
+  const [lr, tb, scatter] = seg.querySelectorAll("button");
   lr.onclick = () => { d.dir = "lr"; buildRight(); renderCanvas(); };
   tb.onclick = () => { d.dir = "tb"; buildRight(); renderCanvas(); };
+  scatter.onclick = () => { d.dir = "scatter"; buildRight(); renderCanvas(); };
   into.appendChild(seg);
+  if (d.dir === "scatter") {
+    const reroll = h(`<button class="mini" style="margin-top:6px">↻ Reroll scatter</button>`);
+    reroll.onclick = () => {
+      d.scatterSeed = Math.floor(Math.random() * 100000);
+      renderCanvas();
+    };
+    into.appendChild(reroll);
+  }
+
+  into.appendChild(h(`<h3 class="panel-title">Node style</h3>`));
+  const nseg = h(`<div class="seg">
+    <button class="${d.nodeStyle === "ticket" ? "active" : ""}">Ticket</button>
+    <button class="${d.nodeStyle === "scallop" ? "active" : ""}">Scallop</button>
+    <button class="${d.nodeStyle === "plain" ? "active" : ""}">Plain</button></div>`);
+  const [ticketB, scallopB, plainB] = nseg.querySelectorAll("button");
+  ticketB.onclick = () => { d.nodeStyle = "ticket"; buildRight(); renderCanvas(); };
+  scallopB.onclick = () => { d.nodeStyle = "scallop"; buildRight(); renderCanvas(); };
+  plainB.onclick = () => { d.nodeStyle = "plain"; buildRight(); renderCanvas(); };
+  into.appendChild(nseg);
 }
 
 function stickerControls(into: HTMLElement) {
@@ -614,14 +689,7 @@ function exportControls(into: HTMLElement) {
   const pngB = h(`<button class="act ghost">Export PNG</button>`);
   pngB.onclick = () => exportPng(doc);
   const saveB = h(`<button class="act ghost">Save to gallery</button>`);
-  saveB.onclick = () => {
-    const name = prompt("Name this piece:", doc.name ?? "");
-    if (name === null) return;
-    doc.name = name || "Untitled";
-    saveToGallery(doc, doc.name);
-    saveB.textContent = "Saved ✓";
-    setTimeout(() => (saveB.textContent = "Save to gallery"), 1400);
-  };
+  saveB.onclick = () => openSaveModal(saveB);
   const shareB = h(`<button class="act ghost">Copy share link</button>`);
   shareB.onclick = async () => {
     const url = `${location.origin}${location.pathname}#d=${encodeDoc(doc)}`;
@@ -630,6 +698,67 @@ function exportControls(into: HTMLElement) {
     setTimeout(() => (shareB.textContent = "Copy share link"), 1400);
   };
   into.append(svgB, pngB, saveB, shareB);
+}
+
+// --- save-to-gallery modal ----------------------------------------------------
+
+const MAKER_KEY = "foldCommons.maker";
+
+function openSaveModal(saveB: HTMLElement) {
+  let savedMaker = "";
+  try {
+    savedMaker = localStorage.getItem(MAKER_KEY) ?? "";
+  } catch {
+    /* private mode etc — just start blank */
+  }
+  const pieceName = doc.name ?? doc.fields.title ?? "";
+  const overlay = h(`<div class="modal-overlay">
+    <div class="modal-card">
+      <h3 class="modal-title">Save to gallery</h3>
+      <div class="field"><label>Your name</label>
+        <input type="text" class="maker-input" value="${savedMaker.replaceAll('"', "&quot;")}" placeholder="Anonymous"></div>
+      <div class="field"><label>Piece name</label>
+        <input type="text" class="name-input" value="${pieceName.replaceAll('"', "&quot;")}" placeholder="Untitled"></div>
+      <div class="modal-actions">
+        <button class="act ghost modal-cancel">Cancel</button>
+        <button class="act modal-save">Save</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  const nameInput = overlay.querySelector(".name-input") as HTMLInputElement;
+  const makerInput = overlay.querySelector(".maker-input") as HTMLInputElement;
+  nameInput.focus();
+  nameInput.select();
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+    if (e.key === "Enter") save();
+  };
+  function close() {
+    window.removeEventListener("keydown", onKey);
+    overlay.remove();
+  }
+  function save() {
+    const name = nameInput.value.trim() || "Untitled";
+    const maker = makerInput.value.trim();
+    doc.name = name;
+    try {
+      localStorage.setItem(MAKER_KEY, maker);
+    } catch {
+      /* private mode etc — nothing to remember across saves */
+    }
+    saveToGallery(doc, name, maker);
+    close();
+    saveB.textContent = "Saved ✓";
+    setTimeout(() => (saveB.textContent = "Save to gallery"), 1400);
+  }
+  window.addEventListener("keydown", onKey);
+  overlay.addEventListener("pointerdown", (e) => {
+    if (e.target === overlay) close();
+  });
+  (overlay.querySelector(".modal-cancel") as HTMLButtonElement).onclick = close;
+  (overlay.querySelector(".modal-save") as HTMLButtonElement).onclick = save;
 }
 
 // --- transform tool -----------------------------------------------------------
@@ -833,15 +962,40 @@ function onDragEnd() {
   const { key, live } = dragState;
   window.removeEventListener("pointermove", onDragMove);
   dragState = null;
+  // clicking (or dragging) an element selects it — box + handles now persist
+  // until something else is clicked, or Escape
+  selected = key;
   setXf(key, live);
   renderCanvas();
 }
+
+// --- selection: standard design-tool model on top of hover ------------------
+// Hover always shows the dashed box (transient). Clicking an element (or
+// dragging it — same gesture, onDragEnd above) selects it: box + handles
+// persist across re-renders and mouse-leave until something else is
+// selected, empty canvas is clicked, or Escape is pressed. One selection at
+// a time.
+let selected: XfKey | null = null;
+
+function deselect() {
+  if (!selected) return;
+  selected = null;
+  document.querySelectorAll('#canvasWrap svg .xf-chrome').forEach((c) => c.remove());
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") deselect();
+});
 
 // Re-attach hover/drag listeners on every render — innerHTML rebuilds the DOM.
 function attachXfInteractivity() {
   if (!docTemplate(doc).composed) return;
   const svgEl = canvasWrap.querySelector("svg");
   if (!svgEl) return;
+  // click on empty canvas (no data-el under the pointer) clears the selection
+  svgEl.addEventListener("pointerdown", (e) => {
+    if (!(e.target as Element).closest("[data-el]")) deselect();
+  });
   for (const key of XF_KEYS) {
     const g = svgEl.querySelector(`[data-el="${key}"]`) as SVGGElement | null;
     if (!g) continue;
@@ -849,8 +1003,12 @@ function attachXfInteractivity() {
     g.addEventListener("pointerenter", () => buildHandles(g, key));
     g.addEventListener("pointerleave", () => {
       if (dragState?.key === key) return;
+      if (selected === key) return;
       g.querySelector(".xf-chrome")?.remove();
     });
+    // the selected element's chrome persists across the re-render that just
+    // rebuilt this DOM — show it immediately, not just on next hover
+    if (selected === key) buildHandles(g, key);
   }
 }
 
@@ -887,7 +1045,9 @@ function buildGallery() {
     const card = h(`<div class="g-card">
       <div class="thumb">${renderDoc(docForRender)}</div>
       <div class="meta">
-        <div class="n">${item.name}</div><div class="d">${item.date}</div>
+        <div class="n">${item.name}</div>
+        ${item.maker ? `<div class="mk">by ${item.maker}</div>` : ""}
+        <div class="d">${item.date}</div>
         <div class="row"></div>
       </div></div>`);
     const row = card.querySelector(".row")!;
