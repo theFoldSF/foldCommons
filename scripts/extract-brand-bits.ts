@@ -73,7 +73,16 @@ export const DESIGNER_SHAPES: DesignerShape[] = ${JSON.stringify(shapes, null, 2
 );
 
 // ---- 3. Embedded photos ------------------------------------------------------
-const photoSrcs: [string, string][] = [
+// RETIRED: the library now holds Jasper's photos of the Fold itself (see
+// public/photos/manifest.json). Skip so a re-run can't clobber it.
+const MANIFEST_EXISTS = (() => {
+  try {
+    return readFileSync(join(PHOTOS, "manifest.json"), "utf8").includes("fold-64");
+  } catch {
+    return false;
+  }
+})();
+const photoSrcs: [string, string][] = MANIFEST_EXISTS ? [] : [
   ["instagram-story-4__7-23.svg", "gather-flute"],
   ["instagram-story-5__7-32.svg", "photo-b"],
   ["instagram-story-7__7-44.svg", "photo-c"],
@@ -102,5 +111,7 @@ for (const [file, id] of photoSrcs) {
   manifest.push({ id, file: out });
   console.log(`✓ photo ${out} (${(buf.length / 1024).toFixed(0)} KB)`);
 }
-writeFileSync(join(PHOTOS, "manifest.json"), JSON.stringify(manifest, null, 2));
-console.log(`✓ manifest.json (${manifest.length} photos)`);
+if (!MANIFEST_EXISTS) {
+  writeFileSync(join(PHOTOS, "manifest.json"), JSON.stringify(manifest, null, 2));
+  console.log(`✓ manifest.json (${manifest.length} photos)`);
+}

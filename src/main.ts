@@ -292,8 +292,9 @@ function photoControls(into: HTMLElement) {
   row.append(up, file, none);
   into.appendChild(row);
   into.appendChild(
-    h(`<div class="note">House photos come from the boards; uploads stay in this doc.
-      Either way the frame and palette keep it ours.</div>`)
+    h(`<div class="note">House photos are shot inside the Fold itself — its windows,
+      brick, and concrete. Uploads stay in this doc. Either way the frame and
+      palette keep it ours.</div>`)
   );
 }
 

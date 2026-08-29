@@ -89,7 +89,7 @@ export function newDoc(templateId: string): Doc {
       layout: "hero",
       frame: "wobble",
       frameSeed: 7,
-      photo: "gather-flute",
+      photo: "fold-6416",
       panelAccent: 0,
       wm: "logo",
       chipAccents: [0, 2],
