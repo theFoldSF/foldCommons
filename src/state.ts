@@ -3,10 +3,12 @@
 // engine params) plus member text — it cannot describe an off-brand artifact,
 // which is what makes shared/remixed docs safe by construction.
 
-import { REGISTERS, SEASONS, type RegisterKey, LINE_MOTIF } from "./brand/tokens";
+import { GROUNDS, REGISTERS, SEASONS, type RegisterKey, LINE_MOTIF } from "./brand/tokens";
 import { ENGINES, defaultParams, engineById } from "./engines/index";
+import { FRAMES } from "./frames/index";
 import { TEMPLATES, templateById, type Template } from "./templates/index";
 import { MARKS } from "./marks/index";
+import { PHOTOS } from "./photos/index";
 
 export interface MotifState {
   engine: string;
@@ -26,13 +28,36 @@ export interface DiagramState {
   dir: "lr" | "tb";
 }
 
+// The composed layouts (poster / story / post): what the frame holds and
+// where everything sits. All values are canon references + seeds.
+export type LayoutKey = "hero" | "panel" | "motif" | "backdrop";
+export const LAYOUTS: { key: LayoutKey; label: string; blurb: string }[] = [
+  { key: "hero", label: "Photo hero", blurb: "A framed photo carries it. Title below, date chips beside." },
+  { key: "panel", label: "Color panel", blurb: "A canon color in an organic frame — the quiet one." },
+  { key: "motif", label: "Motif", blurb: "A generative motif runs the whole frame." },
+  { key: "backdrop", label: "Motif + photo", blurb: "The motif pours behind a framed photo." },
+];
+
+export interface CompState {
+  layout: LayoutKey;
+  frame: string; // frame shape id
+  frameSeed: number;
+  photo: string; // photo library id; "" = none
+  upload?: string; // member-uploaded image (data URI), wins over photo
+  panelAccent: number; // panel fill / photo-less hero fill
+  wm: "logo" | "pill"; // chunky FOLD logotype or "the Fold" pill
+  chipAccents: [number, number]; // date chip, time chip
+}
+
 export interface Doc {
-  v: 1;
+  v: 2;
   template: string;
   register: RegisterKey;
+  ground: number; // index into GROUNDS
   season: string;
   fields: Record<string, string>;
   fieldAccents: Record<string, number>; // zone id → accent index; -1 = ink
+  comp: CompState;
   motif: MotifState | null;
   lineOn: boolean;
   line: { amp: number; periods: number; sw: number };
@@ -45,15 +70,31 @@ export function newDoc(templateId: string): Doc {
   const t = templateById(templateId)!;
   const fields: Record<string, string> = {};
   for (const z of t.zones) fields[z.id] = z.default;
+  if (t.composed) {
+    fields.title = fields.title ?? "Tantric Flute Night";
+    fields.detail = fields.detail ?? "";
+    fields.date = fields.date ?? "Thurs Jul 2";
+    fields.time = fields.time ?? "9pm";
+  }
   const engine = ENGINES[0];
   return {
-    v: 1,
+    v: 2,
     template: t.id,
     register: t.register,
+    ground: 0,
     season: currentSeason(),
     fields,
     fieldAccents: {},
-    motif: t.motifSlot
+    comp: {
+      layout: "hero",
+      frame: "wobble",
+      frameSeed: 7,
+      photo: "gather-flute",
+      panelAccent: 0,
+      wm: "logo",
+      chipAccents: [0, 2],
+    },
+    motif: t.composed || t.motifSlot
       ? { engine: engine.id, seed: 1234, params: defaultParams(engine), accents: [4, 0] }
       : null,
     lineOn: !!t.line,
@@ -82,9 +123,32 @@ export function docTemplate(doc: Doc): Template {
   return templateById(doc.template) ?? TEMPLATES[0];
 }
 
+export function docGround(doc: Doc) {
+  return GROUNDS[((doc.ground % GROUNDS.length) + GROUNDS.length) % GROUNDS.length];
+}
+
 export function docAccent(doc: Doc, idx: number): string {
   const reg = REGISTERS[doc.register];
-  return reg.accents[((idx % reg.accents.length) + reg.accents.length) % reg.accents.length];
+  const accents = reg.accents.filter((a) => a !== docGround(doc).hex);
+  return accents[((idx % accents.length) + accents.length) % accents.length];
+}
+
+// One tap → a genuinely different composition, still entirely inside canon.
+export function shuffleComp(doc: Doc) {
+  const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+  const hasPhoto = !!(doc.comp.upload || doc.comp.photo);
+  const layouts: LayoutKey[] = hasPhoto
+    ? ["hero", "hero", "backdrop", "motif", "panel"]
+    : ["panel", "motif", "motif", "hero"];
+  doc.comp.layout = pick(layouts);
+  doc.comp.frame = pick(FRAMES).id;
+  doc.comp.frameSeed = Math.floor(Math.random() * 100000);
+  doc.comp.panelAccent = Math.floor(Math.random() * 4);
+  doc.comp.wm = pick(["logo", "logo", "pill"]);
+  doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
+  doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
+  doc.register = docGround(doc).register;
+  if (doc.motif) doc.motif.seed = Math.floor(Math.random() * 100000);
 }
 
 export function docSeason(doc: Doc) {
@@ -101,8 +165,31 @@ function currentSeason(): string {
 export function sanitize(doc: Doc): Doc {
   const t = templateById(doc.template) ?? TEMPLATES[0];
   doc.template = t.id;
-  if (!REGISTERS[doc.register]) doc.register = t.register;
   if (!SEASONS.some((s) => s.key === doc.season)) doc.season = currentSeason();
+  // v1 docs and hand-edited links: fill/clamp the composed-layout state.
+  const fresh = newDoc(t.id);
+  if (typeof doc.ground !== "number" || !Number.isFinite(doc.ground)) doc.ground = 0;
+  doc.ground = ((Math.round(doc.ground) % GROUNDS.length) + GROUNDS.length) % GROUNDS.length;
+  doc.comp = { ...fresh.comp, ...(doc.comp ?? {}) };
+  if (!LAYOUTS.some((l) => l.key === doc.comp.layout)) doc.comp.layout = "hero";
+  if (!FRAMES.some((f) => f.id === doc.comp.frame)) doc.comp.frame = FRAMES[0].id;
+  doc.comp.frameSeed = Number.isFinite(doc.comp.frameSeed) ? doc.comp.frameSeed >>> 0 : 7;
+  if (typeof doc.comp.upload !== "string" || !doc.comp.upload.startsWith("data:image/"))
+    delete doc.comp.upload;
+  if (PHOTOS.length && doc.comp.photo && !PHOTOS.some((p) => p.id === doc.comp.photo))
+    doc.comp.photo = "";
+  if (doc.comp.wm !== "logo" && doc.comp.wm !== "pill") doc.comp.wm = "logo";
+  doc.comp.panelAccent = Number.isFinite(doc.comp.panelAccent) ? Math.round(doc.comp.panelAccent) : 0;
+  const ca = doc.comp.chipAccents;
+  doc.comp.chipAccents = [
+    Number.isFinite(ca?.[0]) ? Math.round(ca[0]) : 0,
+    Number.isFinite(ca?.[1]) ? Math.round(ca[1]) : 2,
+  ];
+  doc.fields = { ...fresh.fields, ...(doc.fields ?? {}) };
+  doc.v = 2;
+  // register follows the ground — text stays readable by construction
+  doc.register = docGround(doc).register;
+  if (!REGISTERS[doc.register]) doc.register = t.register;
   if (doc.motif) {
     const e = engineById(doc.motif.engine);
     if (!e) doc.motif.engine = ENGINES[0].id;

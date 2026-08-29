@@ -21,6 +21,7 @@ interface ManifestEntry {
 }
 
 const MANIFEST: ManifestEntry[] = [
+  { id: "fold-logotype", name: "FOLD logotype", file: "fold-logotype.svg" },
   { id: "cootie-catcher", name: "Cootie catcher", file: "cootie-catcher.svg" },
   { id: "fold-script", name: "fold · hand script", file: "fold-script.svg" },
   { id: "tf-ligature", name: "TF ligature", file: "tf-ligature.svg" },

@@ -1,0 +1,9 @@
+[
+  { "id": "gather-flute", "name": "Gathering · flute", "file": "gather-flute.jpg" },
+  { "id": "harp-tractor", "name": "Harp on a tractor", "file": "harp-tractor.jpg" },
+  { "id": "night-porch", "name": "Night porch", "file": "night-porch.jpg" },
+  { "id": "archive-room", "name": "Archive room", "file": "archive-room.jpg" },
+  { "id": "tech-poster", "name": "Tech poster", "file": "tech-poster.jpg" },
+  { "id": "quilt-cloth", "name": "Quilted lattice", "file": "quilt-cloth.png" },
+  { "id": "oscilloscope", "name": "Oscilloscope", "file": "oscilloscope.png" }
+]

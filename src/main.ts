@@ -5,6 +5,7 @@ import {
   AVOID,
   BRAND_SENTENCE,
   CANON_COLORS,
+  GROUNDS,
   LINE_MOTIF,
   OPEN_QUESTIONS,
   REGISTERS,
@@ -15,11 +16,15 @@ import {
 } from "./brand/tokens";
 import { loadFonts } from "./brand/fonts";
 import { ENGINES, defaultParams, engineById } from "./engines/index";
+import { FRAMES } from "./frames/index";
 import { MARKS, loadMarks } from "./marks/index";
+import { PHOTOS, loadPhotos, readUpload } from "./photos/index";
 import { TEMPLATES } from "./templates/index";
 import { renderDoc } from "./render";
 import {
+  LAYOUTS,
   decodeDoc,
+  docGround,
   docTemplate,
   encodeDoc,
   loadGallery,
@@ -27,6 +32,7 @@ import {
   removeFromGallery,
   sanitize,
   saveToGallery,
+  shuffleComp,
   type Doc,
 } from "./state";
 import { exportPng, exportSvg } from "./export";
@@ -93,44 +99,74 @@ function buildLeft() {
       </button>`
     );
     card.onclick = () => {
-      const keepFields = doc.fields;
+      const prev = doc;
       doc = newDoc(t.id);
+      // The design travels with you across sizes: words, ground, frame, photo,
+      // motif all carry over — only the geometry changes.
       for (const z of docTemplate(doc).zones)
-        if (keepFields[z.id]) doc.fields[z.id] = keepFields[z.id];
+        if (prev.fields[z.id]) doc.fields[z.id] = prev.fields[z.id];
+      if (docTemplate(doc).composed) {
+        doc.comp = JSON.parse(JSON.stringify(prev.comp));
+        doc.ground = prev.ground;
+        doc.register = docGround(doc).register;
+        if (prev.motif && doc.motif) doc.motif = JSON.parse(JSON.stringify(prev.motif));
+      }
       buildAll();
     };
     leftPanel.appendChild(card);
   }
 
-  leftPanel.appendChild(h(`<h3 class="panel-title">Register</h3>`));
-  const seg = h(`<div class="seg"></div>`);
-  (Object.keys(REGISTERS) as RegisterKey[]).forEach((k) => {
-    const b = h(`<button class="${doc.register === k ? "active" : ""}">${REGISTERS[k].label}</button>`);
-    b.onclick = () => {
-      doc.register = k;
-      buildAll();
-    };
-    seg.appendChild(b);
-  });
-  leftPanel.appendChild(seg);
-
-  leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
-  const chips = h(`<div class="chips"></div>`);
-  for (const s of SEASONS) {
-    const c = h(
-      `<button class="chip ${doc.season === s.key ? "active" : ""}" style="background:${s.accent}" title="${s.label}"></button>`
+  if (docTemplate(doc).composed) {
+    leftPanel.appendChild(h(`<h3 class="panel-title">Ground</h3>`));
+    const chips = h(`<div class="chips"></div>`);
+    GROUNDS.forEach((g, i) => {
+      const c = h(
+        `<button class="chip ${doc.ground === i ? "active" : ""}" style="background:${g.hex}" title="${g.label}"></button>`
+      );
+      c.onclick = () => {
+        doc.ground = i;
+        doc.register = g.register;
+        buildAll();
+      };
+      chips.appendChild(c);
+    });
+    leftPanel.appendChild(chips);
+    leftPanel.appendChild(
+      h(`<div class="note">Any canon color can carry the whole piece — the ink adjusts itself.</div>`)
     );
-    c.onclick = () => {
-      doc.season = s.key;
-      buildLeft();
-      renderCanvas();
-    };
-    chips.appendChild(c);
+  } else {
+    leftPanel.appendChild(h(`<h3 class="panel-title">Register</h3>`));
+    const seg = h(`<div class="seg"></div>`);
+    (Object.keys(REGISTERS) as RegisterKey[]).forEach((k) => {
+      const b = h(`<button class="${doc.register === k ? "active" : ""}">${REGISTERS[k].label}</button>`);
+      b.onclick = () => {
+        doc.register = k;
+        buildAll();
+      };
+      seg.appendChild(b);
+    });
+    leftPanel.appendChild(seg);
   }
-  leftPanel.appendChild(chips);
-  leftPanel.appendChild(
-    h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
-  );
+
+  if (!docTemplate(doc).composed) {
+    leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
+    const chips = h(`<div class="chips"></div>`);
+    for (const s of SEASONS) {
+      const c = h(
+        `<button class="chip ${doc.season === s.key ? "active" : ""}" style="background:${s.accent}" title="${s.label}"></button>`
+      );
+      c.onclick = () => {
+        doc.season = s.key;
+        buildLeft();
+        renderCanvas();
+      };
+      chips.appendChild(c);
+    }
+    leftPanel.appendChild(chips);
+    leftPanel.appendChild(
+      h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
+    );
+  }
 
   leftPanel.appendChild(
     h(`<div class="note">Everything here draws from the canon — palettes, faces, and motifs
@@ -140,8 +176,162 @@ function buildLeft() {
 
 // --- right panel: contextual controls ---------------------------------------
 
+// --- composed-template panels ------------------------------------------------
+
+function compControls(into: HTMLElement) {
+  const t = docTemplate(doc);
+  if (!t.composed) return;
+  into.appendChild(h(`<h3 class="panel-title">Composition</h3>`));
+
+  const shuffle = h(`<button class="act" style="margin-bottom:10px">🎲 Shuffle composition</button>`);
+  shuffle.onclick = () => {
+    shuffleComp(doc);
+    buildAll();
+  };
+  into.appendChild(shuffle);
+
+  const cards = h(`<div class="layout-grid"></div>`);
+  for (const l of LAYOUTS) {
+    const b = h(
+      `<button class="tpl-card ${doc.comp.layout === l.key ? "active" : ""}">
+        <div class="t">${l.label}</div><div class="b">${l.blurb}</div></button>`
+    );
+    b.onclick = () => {
+      doc.comp.layout = l.key;
+      buildRight();
+      renderCanvas();
+    };
+    cards.appendChild(b);
+  }
+  into.appendChild(cards);
+
+  const frameRow = h(`<div class="field"><label>Frame shape</label></div>`);
+  const seg = h(`<div class="seg wrap"></div>`);
+  for (const f of FRAMES) {
+    const b = h(`<button class="${doc.comp.frame === f.id ? "active" : ""}">${f.label}</button>`);
+    b.onclick = () => {
+      doc.comp.frame = f.id;
+      buildRight();
+      renderCanvas();
+    };
+    seg.appendChild(b);
+  }
+  frameRow.appendChild(seg);
+  const reroll = h(`<button class="mini" style="margin-top:6px">↻ Reroll frame</button>`);
+  reroll.onclick = () => {
+    doc.comp.frameSeed = Math.floor(Math.random() * 100000);
+    renderCanvas();
+  };
+  frameRow.appendChild(reroll);
+  into.appendChild(frameRow);
+
+  const wmRow = h(`<div class="field"><label>Signature</label></div>`);
+  const wmSeg = h(`<div class="seg">
+    <button class="${doc.comp.wm === "logo" ? "active" : ""}">FOLD logotype</button>
+    <button class="${doc.comp.wm === "pill" ? "active" : ""}">“the Fold” pill</button></div>`);
+  const [wl, wp] = wmSeg.querySelectorAll("button");
+  (wl as HTMLButtonElement).onclick = () => { doc.comp.wm = "logo"; buildRight(); renderCanvas(); };
+  (wp as HTMLButtonElement).onclick = () => { doc.comp.wm = "pill"; buildRight(); renderCanvas(); };
+  wmRow.appendChild(wmSeg);
+  into.appendChild(wmRow);
+
+  if (doc.comp.layout === "panel") {
+    const f = h(`<div class="field"><label>Panel color</label></div>`);
+    f.appendChild(
+      accentChips(doc.comp.panelAccent, {}, (idx) => {
+        doc.comp.panelAccent = idx;
+        buildRight();
+        renderCanvas();
+      })
+    );
+    into.appendChild(f);
+  }
+}
+
+function photoControls(into: HTMLElement) {
+  const t = docTemplate(doc);
+  if (!t.composed) return;
+  if (doc.comp.layout === "panel" || doc.comp.layout === "motif") return;
+  into.appendChild(h(`<h3 class="panel-title">Photo</h3>`));
+
+  const grid = h(`<div class="photo-grid"></div>`);
+  for (const p of PHOTOS) {
+    const on = !doc.comp.upload && doc.comp.photo === p.id;
+    const cell = h(
+      `<button class="photo-cell ${on ? "active" : ""}" title="${p.name}">
+        <img src="${p.src}" alt="${p.name}"></button>`
+    );
+    cell.onclick = () => {
+      delete doc.comp.upload;
+      doc.comp.photo = p.id;
+      buildRight();
+      renderCanvas();
+    };
+    grid.appendChild(cell);
+  }
+  into.appendChild(grid);
+
+  const row = h(`<div class="row" style="margin:8px 0 14px"></div>`);
+  const up = h(`<button class="mini" style="flex:1">⤒ Upload photo${doc.comp.upload ? " ✓" : ""}</button>`);
+  const file = h(`<input type="file" accept="image/*" style="display:none">`) as HTMLInputElement;
+  up.onclick = () => file.click();
+  file.onchange = async () => {
+    if (!file.files?.[0]) return;
+    const p = await readUpload(file.files[0]);
+    doc.comp.upload = p.src;
+    buildRight();
+    renderCanvas();
+  };
+  const none = h(`<button class="mini">No photo</button>`);
+  none.onclick = () => {
+    delete doc.comp.upload;
+    doc.comp.photo = "";
+    buildRight();
+    renderCanvas();
+  };
+  row.append(up, file, none);
+  into.appendChild(row);
+  into.appendChild(
+    h(`<div class="note">House photos come from the boards; uploads stay in this doc.
+      Either way the frame and palette keep it ours.</div>`)
+  );
+}
+
+function composedWordControls(into: HTMLElement) {
+  const t = docTemplate(doc);
+  into.appendChild(h(`<h3 class="panel-title">Words</h3>`));
+  const fields: { id: string; label: string; chip?: 0 | 1 }[] = [
+    { id: "title", label: "Title" },
+    { id: "detail", label: "Details (optional)" },
+    { id: "date", label: "Date chip", chip: 0 },
+    { id: "time", label: "Time chip", chip: 1 },
+  ];
+  for (const fdef of fields) {
+    const f = h(`<div class="field"><label>${fdef.label}</label></div>`);
+    const input = h(
+      `<input type="text" value="${(doc.fields[fdef.id] ?? "").replaceAll('"', "&quot;")}">`
+    ) as HTMLInputElement;
+    input.oninput = () => {
+      doc.fields[fdef.id] = input.value;
+      renderCanvas();
+    };
+    f.appendChild(input);
+    if (fdef.chip !== undefined) {
+      f.appendChild(
+        accentChips(doc.comp.chipAccents[fdef.chip], {}, (idx) => {
+          doc.comp.chipAccents[fdef.chip!] = idx;
+          buildRight();
+          renderCanvas();
+        })
+      );
+    }
+    into.appendChild(f);
+  }
+}
+
 function fieldControls(into: HTMLElement) {
   const t = docTemplate(doc);
+  if (t.composed) return composedWordControls(into);
   if (!t.zones.length) return;
   into.appendChild(h(`<h3 class="panel-title">Words</h3>`));
   for (const z of t.zones) {
@@ -172,7 +362,9 @@ function fieldControls(into: HTMLElement) {
 
 function motifControls(into: HTMLElement) {
   const t = docTemplate(doc);
-  if (!t.motifSlot || !doc.motif) return;
+  const composedMotif =
+    t.composed && (doc.comp.layout === "motif" || doc.comp.layout === "backdrop");
+  if ((!t.motifSlot && !composedMotif) || !doc.motif) return;
   into.appendChild(h(`<h3 class="panel-title">Motif</h3>`));
   const sel = h(
     `<div class="field"><select>${ENGINES.map(
@@ -384,6 +576,8 @@ function exportControls(into: HTMLElement) {
 
 function buildRight() {
   rightPanel.innerHTML = "";
+  compControls(rightPanel);
+  photoControls(rightPanel);
   fieldControls(rightPanel);
   motifControls(rightPanel);
   lineControls(rightPanel);
@@ -407,8 +601,10 @@ function buildGallery() {
     return;
   }
   for (const item of items) {
+    // older saves predate the composed-layout doc shape — clamp before render
+    const docForRender = sanitize(JSON.parse(JSON.stringify(item.doc)));
     const card = h(`<div class="g-card">
-      <div class="thumb">${renderDoc(item.doc)}</div>
+      <div class="thumb">${renderDoc(docForRender)}</div>
       <div class="meta">
         <div class="n">${item.name}</div><div class="d">${item.date}</div>
         <div class="row"></div>
@@ -416,7 +612,7 @@ function buildGallery() {
     const row = card.querySelector(".row")!;
     const remix = h(`<button class="mini">Remix</button>`);
     remix.onclick = () => {
-      doc = JSON.parse(JSON.stringify(item.doc));
+      doc = sanitize(JSON.parse(JSON.stringify(item.doc)));
       switchView("make");
       buildAll();
     };
@@ -520,11 +716,13 @@ function buildAll() {
 
 buildAll();
 
-// The mesh marks load async from public/marks/ — refresh whatever is on screen
-// once they land.
-loadMarks(() => {
+// The marks and the photo library load async from public/ — refresh whatever
+// is on screen once each lands.
+const refresh = () => {
   sanitize(doc);
   buildAll();
   if ($("#canonView").classList.contains("active")) buildCanon();
   if ($("#galleryView").classList.contains("active")) buildGallery();
-});
+};
+loadMarks(refresh);
+loadPhotos(refresh);

@@ -1,11 +1,13 @@
 // render.ts — Doc → SVG. One renderer for the on-screen canvas, gallery
 // thumbnails, and exports, so what you see is exactly what ships.
 
-import { REGISTERS, TYPE_RULES, type TypeRole } from "./brand/tokens";
+import { REGISTERS, TYPE_RULES, isDark, type TypeRole } from "./brand/tokens";
 import { fontFamilyCss } from "./brand/fonts";
 import { engineById } from "./engines/index";
+import { framePath, ticketPath } from "./frames/index";
 import { markById } from "./marks/index";
-import { docAccent, docSeason, docTemplate, type Doc } from "./state";
+import { photoById } from "./photos/index";
+import { docAccent, docGround, docSeason, docTemplate, type Doc } from "./state";
 import type { TextZone } from "./templates/index";
 
 const esc = (s: string) =>
@@ -94,6 +96,163 @@ function wordmarkSvg(doc: Doc, ink: string): string {
     letter-spacing="${wm.tracking * wordmark.size}">${wm.text}</text>`;
 }
 
+// --- the frame composer (poster / story / post) ------------------------------
+// The board language: an organic frame holding a photo, a canon color, or a
+// motif; a plain sans title; ticket-stub date chips; the chunky FOLD logotype.
+
+let uid = 0;
+
+const heading = () => TYPE_RULES.byRole("heading")[0];
+const bodyFace = () => TYPE_RULES.byRole("body")[0];
+
+function logotypeSvg(x: number, y: number, h: number, color: string, alignRight = false): string {
+  const m = markById("fold-logotype");
+  if (!m) return "";
+  const [, , vw, vh] = m.viewBox.split(/\s+/).map(Number);
+  const w = (h * vw) / vh;
+  return `<svg x="${(alignRight ? x - w : x).toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h}"
+    viewBox="${m.viewBox}" color="${color}">${m.svg}</svg>`;
+}
+
+function pillSvg(x: number, y: number, size: number, ink: string, ground: string, alignRight = false): string {
+  const text = "the Fold";
+  const w = text.length * size * 0.52 + size * 1.8;
+  const h = size * 1.9;
+  const px = alignRight ? x - w : x;
+  return `<g><rect x="${px}" y="${y}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="${h / 2}"
+      fill="${ground}" stroke="${ink}" stroke-width="${Math.max(1.5, size * 0.07)}"/>
+    <text x="${px + w / 2}" y="${y + h / 2}" text-anchor="middle" dominant-baseline="central" fill="${ink}"
+      font-family="${fontFamilyCss("Figtree")}" font-size="${size}" font-weight="700">the Fold</text></g>`;
+}
+
+function chipSvg(
+  text: string,
+  accent: string,
+  right: number,
+  cy: number,
+  size: number,
+  seed: number
+): { svg: string; w: number } {
+  if (!text.trim()) return { svg: "", w: 0 };
+  const w = text.length * size * 0.56 + size * 1.7;
+  const h = size * 1.75;
+  const x = right - w;
+  const ink = isDark(accent) ? "#FFF9F1" : "#03071B";
+  return {
+    svg: `<g transform="translate(${x.toFixed(1)} ${(cy - h / 2).toFixed(1)})">
+      <path d="${ticketPath(seed, w, h)}" fill="${accent}"/>
+      <text x="${w / 2}" y="${h / 2}" text-anchor="middle" dominant-baseline="central" fill="${ink}"
+        font-family="${fontFamilyCss("Figtree")}" font-size="${size}" font-weight="600">${esc(text)}</text></g>`,
+    w,
+  };
+}
+
+// The framed window: photo (cover-fit), flat accent, or motif — clipped by an
+// organic frame shape.
+function frameWindow(
+  doc: Doc,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  content: "photo" | "fill" | "motif"
+): string {
+  const id = `fw${uid++}`;
+  const fp = framePath(doc.comp.frame, doc.comp.frameSeed, w, h);
+  const clip = `<clipPath id="${id}"><path d="${fp.d}"${fp.transform ? ` transform="${fp.transform}"` : ""}/></clipPath>`;
+  let inner = "";
+  if (content === "photo") {
+    const src = doc.comp.upload ?? photoById(doc.comp.photo)?.src;
+    if (src) {
+      inner = `<image href="${src}" x="0" y="0" width="${w}" height="${h}"
+        preserveAspectRatio="xMidYMid slice"/>`;
+    } else content = "fill";
+  }
+  if (content === "fill") {
+    inner = `<rect width="${w}" height="${h}" fill="${docAccent(doc, doc.comp.panelAccent)}"/>`;
+  }
+  if (content === "motif") {
+    inner = `<rect width="${w}" height="${h}" fill="${docGround(doc).hex}"/>${motifArt(doc, w, h)}`;
+  }
+  return `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><defs>${clip}</defs>
+    <g clip-path="url(#${id})">${inner}</g></g>`;
+}
+
+// Raw motif art at w×h on the current ground.
+function motifArt(doc: Doc, w: number, h: number): string {
+  if (!doc.motif) return "";
+  const e = engineById(doc.motif.engine);
+  if (!e) return "";
+  const g = docGround(doc);
+  return e.render({
+    w,
+    h,
+    p: doc.motif.params,
+    colors: doc.motif.accents.map((i) => docAccent(doc, i)),
+    ink: g.ink,
+    ground: g.hex,
+    seed: doc.motif.seed,
+  });
+}
+
+function composedSvg(doc: Doc, W: number, H: number): string {
+  const t = docTemplate(doc);
+  const c = t.comp!;
+  const g = docGround(doc);
+  const ink = g.ink;
+  const m = c.margin;
+  const comp = doc.comp;
+  const title = (doc.fields.title ?? "").trim();
+  const detail = (doc.fields.detail ?? "").trim();
+
+  // Bottom band: logotype/pill left, chips right — shared by every layout.
+  const rowCy = H - m - c.logoH / 2;
+  let bottom = "";
+  if (comp.wm === "logo") bottom += logotypeSvg(m, rowCy - c.logoH / 2, c.logoH, ink);
+  else bottom += pillSvg(m, rowCy - c.chipSize * 0.95, c.chipSize, ink, g.hex);
+  let right = W - m;
+  const time = chipSvg(doc.fields.time ?? "", docAccent(doc, comp.chipAccents[1]), right, rowCy, c.chipSize, comp.frameSeed + 1);
+  right -= time.w ? time.w + c.chipSize * 0.6 : 0;
+  const date = chipSvg(doc.fields.date ?? "", docAccent(doc, comp.chipAccents[0]), right, rowCy, c.chipSize, comp.frameSeed + 2);
+  bottom += time.svg + date.svg;
+
+  // Title block above the bottom band.
+  const titleY = H - m - c.logoH - m * 0.7 - (detail ? c.detailSize * 1.5 : 0);
+  let text = "";
+  if (title)
+    text += `<text x="${m}" y="${titleY}" fill="${ink}" font-family="${fontFamilyCss(heading().name)}"
+      font-size="${c.titleSize}" font-weight="${heading().weight}">${esc(title)}</text>`;
+  if (detail)
+    text += `<text x="${m}" y="${titleY + c.detailSize * 1.6}" fill="${ink}" font-family="${fontFamilyCss(bodyFace().name)}"
+      font-size="${c.detailSize}" font-weight="${bodyFace().weight}">${esc(detail)}</text>`;
+
+  const heroTop = m;
+  const heroBottom = title || detail ? titleY - c.titleSize - m * 0.5 : H - m - c.logoH - m * 0.7;
+
+  if (comp.layout === "hero" || comp.layout === "panel") {
+    const win = frameWindow(doc, m * 0.7, heroTop, W - m * 1.4, heroBottom - heroTop,
+      comp.layout === "panel" ? "fill" : "photo");
+    return win + text + bottom;
+  }
+
+  if (comp.layout === "motif") {
+    // full-bleed motif; the words sit right on it
+    return motifArt(doc, W, H) + text + bottom;
+  }
+
+  // backdrop: motif pours across the top, the framed photo floats over it
+  const motifH = H * 0.66;
+  const motif = `<svg x="0" y="0" width="${W}" height="${motifH}" viewBox="0 0 ${W} ${motifH}"
+    overflow="hidden">${motifArt(doc, W, motifH)}</svg>`;
+  const pw = W * 0.72;
+  const ph = Math.min(heroBottom - m * 1.6, H * 0.5);
+  const px = (W - pw) / 2;
+  const py = Math.max(m * 1.4, motifH - ph * 0.82);
+  const photo = frameWindow(doc, px, py, pw, ph, "photo");
+  const tag = pillSvg(px + pw, py + ph + c.chipSize * 0.7, c.chipSize * 0.9, ink, g.hex, true);
+  return motif + photo + tag + text + bottom;
+}
+
 // --- diagram kit -------------------------------------------------------------
 
 function diagramSvg(doc: Doc, W: number, H: number, ink: string, ground: string): string {
@@ -178,11 +337,19 @@ function stickersSvg(doc: Doc, W: number, H: number): string {
 
 export function renderDoc(doc: Doc, opts: { fontCss?: string } = {}): string {
   const t = docTemplate(doc);
+  const W = t.w, H = t.h;
+  const style = opts.fontCss ? `<style>${opts.fontCss}</style>` : "";
+  if (t.composed) {
+    const g = docGround(doc);
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+      ${style}
+      <rect width="${W}" height="${H}" fill="${g.hex}"/>
+      ${composedSvg(doc, W, H)}
+    </svg>`;
+  }
   const reg = REGISTERS[doc.register];
   const ground = reg.ground;
   const ink = reg.ink;
-  const W = t.w, H = t.h;
-  const style = opts.fontCss ? `<style>${opts.fontCss}</style>` : "";
   const body =
     t.kind === "diagram"
       ? diagramSvg(doc, W, H, ink, ground)

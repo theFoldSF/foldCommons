@@ -91,6 +91,47 @@ export const REGISTERS: Record<RegisterKey, Register> = {
 };
 
 // ---------------------------------------------------------------------------
+// Grounds — any canon color can carry a whole composition (the exploration
+// boards run cream, deep ink, orange, gray). Each ground knows its ink and
+// which register's accent list it borrows.
+// ---------------------------------------------------------------------------
+
+export interface Ground {
+  key: string;
+  label: string;
+  hex: string;
+  ink: string; // text/logotype color on this ground
+  register: RegisterKey; // accent list source
+}
+
+const g = (key: keyof typeof COLOR, ink: string, register: RegisterKey): Ground => ({
+  key,
+  label: COLOR[key].name,
+  hex: COLOR[key].hex,
+  ink,
+  register,
+});
+
+export const GROUNDS: Ground[] = [
+  g("cream", COLOR.ink.hex, "paper"),
+  g("cream2", COLOR.ink.hex, "paper"),
+  g("warmGray", COLOR.ink.hex, "paper"),
+  g("orange", COLOR.cream.hex, "paper"),
+  g("pink", COLOR.ink.hex, "paper"),
+  g("sky", COLOR.ink.hex, "paper"),
+  g("green", COLOR.ink.hex, "paper"),
+  g("blueprint", COLOR.cream.hex, "blueprint"),
+  g("ink", COLOR.cream.hex, "blueprint"),
+];
+
+// Rough relative luminance — used to pick readable text on accent chips.
+export function isDark(hex: string): boolean {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, gg = (n >> 8) & 255, b = n & 255;
+  return 0.299 * r + 0.587 * gg + 0.114 * b < 140;
+}
+
+// ---------------------------------------------------------------------------
 // Seasons — the vault's seasonal Line system, recolored through the deck
 // palette. Structure constant, color variable, time marked by hue.
 // ---------------------------------------------------------------------------

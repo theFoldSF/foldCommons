@@ -22,6 +22,14 @@ export interface TextZone {
 
 export type TemplateKind = "poster" | "story" | "post" | "diagram" | "stickers";
 
+export interface CompMetrics {
+  margin: number; // outer margin, canvas units
+  titleSize: number;
+  detailSize: number;
+  chipSize: number;
+  logoH: number; // FOLD logotype height
+}
+
 export interface Template {
   id: string;
   label: string;
@@ -32,6 +40,10 @@ export interface Template {
   register: RegisterKey;
   allowRegisterSwitch: boolean;
   zones: TextZone[];
+  // Composed kinds (poster/story/post) render via the frame composer instead
+  // of fixed zones; `comp` carries their type metrics.
+  composed?: boolean;
+  comp?: CompMetrics;
   // Where generative motif art lives. "backdrop" fills behind everything.
   motifSlot?: { x: number; y: number; w: number; h: number } | "backdrop";
   // The Line: y as fraction of height. Templates place it; members tune within canon ranges.
@@ -39,11 +51,11 @@ export interface Template {
   wordmark: { x: number; y: number; size: number; align: "start" | "middle" | "end" };
 }
 
-const flyerZones = (W: number, H: number, s: number): TextZone[] => [
-  { id: "kicker", label: "Kicker", role: "mono", x: W / 2, y: H * 0.1, w: W * 0.8, size: 22 * s, align: "middle", default: "THE FOLD PRESENTS", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
-  { id: "title", label: "Title", role: "display", x: W / 2, y: H * 0.34, w: W * 0.86, size: 92 * s, align: "middle", default: "Salon Night", lines: 3, colorable: true },
-  { id: "detail", label: "Details", role: "body", x: W / 2, y: H * 0.62, w: W * 0.72, size: 26 * s, align: "middle", default: "Readings, music, and long conversation.\nAll are welcome.", lines: 4 },
-  { id: "when", label: "When / where", role: "mono", x: W / 2, y: H * 0.87, w: W * 0.8, size: 24 * s, align: "middle", default: "FRI SEPT 12 · 7PM · THE FOLD", uppercase: true, tracking: 0.14, lines: 2, colorable: true },
+const composedZones = (title: string): TextZone[] => [
+  { id: "title", label: "Title", role: "heading", x: 0, y: 0, w: 0, size: 0, align: "start", default: title },
+  { id: "detail", label: "Details (optional)", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "" },
+  { id: "date", label: "Date chip", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "Thurs Jul 2", colorable: true },
+  { id: "time", label: "Time chip", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "9pm", colorable: true },
 ];
 
 export const TEMPLATES: Template[] = [
@@ -56,9 +68,9 @@ export const TEMPLATES: Template[] = [
     h: 1100,
     register: "paper",
     allowRegisterSwitch: true,
-    zones: flyerZones(850, 1100, 1),
-    motifSlot: { x: 85, y: 462, w: 680, h: 187 },
-    line: { y: 0.72 },
+    composed: true,
+    comp: { margin: 64, titleSize: 52, detailSize: 26, chipSize: 24, logoH: 34 },
+    zones: composedZones("Salon Night"),
     wordmark: { x: 425, y: 1042, size: 20, align: "middle" },
   },
   {
@@ -70,9 +82,9 @@ export const TEMPLATES: Template[] = [
     h: 1350,
     register: "paper",
     allowRegisterSwitch: true,
-    zones: flyerZones(1080, 1350, 1.28),
-    motifSlot: { x: 108, y: 567, w: 864, h: 230 },
-    line: { y: 0.72 },
+    composed: true,
+    comp: { margin: 80, titleSize: 64, detailSize: 32, chipSize: 30, logoH: 42 },
+    zones: composedZones("Salon Night"),
     wordmark: { x: 540, y: 1280, size: 26, align: "middle" },
   },
   {
@@ -84,14 +96,9 @@ export const TEMPLATES: Template[] = [
     h: 1920,
     register: "paper",
     allowRegisterSwitch: true,
-    zones: [
-      { id: "kicker", label: "Kicker", role: "mono", x: 540, y: 340, w: 800, size: 30, align: "middle", default: "THIS WEEK AT THE FOLD", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
-      { id: "title", label: "Title", role: "display", x: 540, y: 700, w: 900, size: 120, align: "middle", default: "Open Studio", lines: 3, colorable: true },
-      { id: "detail", label: "Details", role: "body", x: 540, y: 1180, w: 760, size: 38, align: "middle", default: "Bring the thing you're making.", lines: 3 },
-      { id: "when", label: "When", role: "mono", x: 540, y: 1560, w: 800, size: 32, align: "middle", default: "WEDNESDAY · 6–10PM", uppercase: true, tracking: 0.16, lines: 1, colorable: true },
-    ],
-    motifSlot: "backdrop",
-    line: { y: 0.45 },
+    composed: true,
+    comp: { margin: 90, titleSize: 72, detailSize: 36, chipSize: 32, logoH: 48 },
+    zones: composedZones("Open Studio"),
     wordmark: { x: 540, y: 1800, size: 30, align: "middle" },
   },
   {
@@ -103,13 +110,9 @@ export const TEMPLATES: Template[] = [
     h: 1080,
     register: "paper",
     allowRegisterSwitch: true,
-    zones: [
-      { id: "kicker", label: "Kicker", role: "mono", x: 100, y: 140, w: 880, size: 28, align: "start", default: "THE FOLD", uppercase: true, tracking: 0.28, lines: 1, colorable: true },
-      { id: "title", label: "Title", role: "display", x: 100, y: 320, w: 880, size: 96, align: "start", default: "A gathering place", lines: 3, colorable: true },
-      { id: "detail", label: "Details", role: "body", x: 100, y: 880, w: 700, size: 34, align: "start", default: "Third space · gallery · cafe", lines: 2 },
-    ],
-    motifSlot: { x: 100, y: 560, w: 880, h: 260 },
-    line: { y: 0.52 },
+    composed: true,
+    comp: { margin: 76, titleSize: 60, detailSize: 32, chipSize: 30, logoH: 42 },
+    zones: composedZones("Tantric Flute Night"),
     wordmark: { x: 980, y: 1010, size: 24, align: "end" },
   },
   {
