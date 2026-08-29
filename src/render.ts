@@ -3,7 +3,7 @@
 
 import { REGISTERS, TYPE_RULES, isDark, type TypeRole } from "./brand/tokens";
 import { fontFamilyCss } from "./brand/fonts";
-import { engineById } from "./engines/index";
+import { SIGNATURE_ENGINE, engineById } from "./engines/index";
 import { framePath, ticketPath } from "./frames/index";
 import { markById } from "./marks/index";
 import { photoById } from "./photos/index";
@@ -105,24 +105,22 @@ let uid = 0;
 const heading = () => TYPE_RULES.byRole("heading")[0];
 const bodyFace = () => TYPE_RULES.byRole("body")[0];
 
-function logotypeSvg(x: number, y: number, h: number, color: string, alignRight = false): string {
-  const m = markById("fold-logotype");
-  if (!m) return "";
-  const [, , vw, vh] = m.viewBox.split(/\s+/).map(Number);
-  const w = (h * vw) / vh;
-  return `<svg x="${(alignRight ? x - w : x).toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h}"
-    viewBox="${m.viewBox}" color="${color}">${m.svg}</svg>`;
-}
-
-function pillSvg(x: number, y: number, size: number, ink: string, ground: string, alignRight = false): string {
-  const text = "the Fold";
-  const w = text.length * size * 0.52 + size * 1.8;
-  const h = size * 1.9;
-  const px = alignRight ? x - w : x;
-  return `<g><rect x="${px}" y="${y}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="${h / 2}"
-      fill="${ground}" stroke="${ink}" stroke-width="${Math.max(1.5, size * 0.07)}"/>
-    <text x="${px + w / 2}" y="${y + h / 2}" text-anchor="middle" dominant-baseline="central" fill="${ink}"
-      font-family="${fontFamilyCss("Figtree")}" font-size="${size}" font-weight="700">the Fold</text></g>`;
+// The signature: one F·O·L·D net mark, bottom-left of every composed layout.
+// The engine renders in a small corner box; size/weight are scaled up so the
+// mark reads at logotype scale, and tiles is pinned to 1 — one mark, always.
+function signatureSvg(doc: Doc, x: number, y: number, w: number, h: number, ink: string): string {
+  const sp = doc.comp.sig.params;
+  const inner = SIGNATURE_ENGINE.render({
+    w,
+    h,
+    p: { ...sp, tiles: 1, size: (sp.size ?? 1) * 2.2, weight: (sp.weight ?? 1) * 3 },
+    colors: [],
+    ink,
+    ground: "none",
+    seed: doc.comp.sig.seed,
+  });
+  return `<svg x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}"
+    viewBox="0 0 ${w.toFixed(1)} ${h.toFixed(1)}" overflow="hidden">${inner}</svg>`;
 }
 
 function chipSvg(
@@ -217,11 +215,11 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const detail = (doc.fields.detail ?? "").trim();
   const bg = bgTextureSvg(doc, W, H);
 
-  // Bottom band: logotype/pill left, chips right — shared by every layout.
-  const rowCy = H - m - c.logoH / 2;
-  let bottom = "";
-  if (comp.wm === "logo") bottom += logotypeSvg(m, rowCy - c.logoH / 2, c.logoH, ink);
-  else bottom += pillSvg(m, rowCy - c.chipSize * 0.95, c.chipSize, ink, g.hex);
+  // Bottom band: the F·O·L·D net signature left, chips right — every layout.
+  const sigH = c.logoH * 2.8;
+  const sigW = c.logoH * 7;
+  const rowCy = H - m + m * 0.35 - sigH / 2;
+  let bottom = signatureSvg(doc, m * 0.7, rowCy - sigH / 2, sigW, sigH, ink);
   let right = W - m;
   const time = chipSvg(doc.fields.time ?? "", docAccent(doc, comp.chipAccents[1]), right, rowCy, c.chipSize, comp.frameSeed + 1);
   right -= time.w ? time.w + c.chipSize * 0.6 : 0;
@@ -229,7 +227,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   bottom += time.svg + date.svg;
 
   // Title block above the bottom band.
-  const titleY = H - m - c.logoH - m * 0.7 - (detail ? c.detailSize * 1.5 : 0);
+  const titleY = H - m - sigH - m * 0.35 - (detail ? c.detailSize * 1.5 : 0);
   let text = "";
   if (title)
     text += `<text x="${m}" y="${titleY}" fill="${ink}" font-family="${fontFamilyCss(heading().name)}"
@@ -239,7 +237,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
       font-size="${c.detailSize}" font-weight="${bodyFace().weight}">${esc(detail)}</text>`;
 
   const heroTop = m;
-  const heroBottom = title || detail ? titleY - c.titleSize - m * 0.5 : H - m - c.logoH - m * 0.7;
+  const heroBottom = title || detail ? titleY - c.titleSize - m * 0.5 : H - m - sigH - m * 0.35;
 
   if (comp.layout === "hero" || comp.layout === "panel") {
     const win = frameWindow(doc, m * 0.7, heroTop, W - m * 1.4, heroBottom - heroTop,
@@ -260,8 +258,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const px = (W - pw) / 2;
     const py = m + (heroBottom - m - ph) * 0.42;
     const photo = frameWindow(doc, px, py, pw, ph, "photo");
-    const tag = pillSvg(px + pw, py + ph + c.chipSize * 0.7, c.chipSize * 0.9, ink, g.hex, true);
-    return bg + motifArt(doc, W, H) + photo + tag + text + bottom;
+    return bg + motifArt(doc, W, H) + photo + text + bottom;
   }
 
   // backdrop: motif pours across the top, the framed photo floats over it
@@ -273,8 +270,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const px = (W - pw) / 2;
   const py = Math.max(m * 1.4, motifH - ph * 0.82);
   const photo = frameWindow(doc, px, py, pw, ph, "photo");
-  const tag = pillSvg(px + pw, py + ph + c.chipSize * 0.7, c.chipSize * 0.9, ink, g.hex, true);
-  return bg + motif + photo + tag + text + bottom;
+  return bg + motif + photo + text + bottom;
 }
 
 // --- diagram kit -------------------------------------------------------------

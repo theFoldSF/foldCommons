@@ -24,6 +24,7 @@ import { renderDoc } from "./render";
 import {
   BG_FADE,
   LAYOUTS,
+  SIG_PARAMS,
   decodeDoc,
   docGround,
   docTemplate,
@@ -226,16 +227,6 @@ function compControls(into: HTMLElement) {
   frameRow.appendChild(reroll);
   into.appendChild(frameRow);
 
-  const wmRow = h(`<div class="field"><label>Signature</label></div>`);
-  const wmSeg = h(`<div class="seg">
-    <button class="${doc.comp.wm === "logo" ? "active" : ""}">FOLD logotype</button>
-    <button class="${doc.comp.wm === "pill" ? "active" : ""}">“the Fold” pill</button></div>`);
-  const [wl, wp] = wmSeg.querySelectorAll("button");
-  (wl as HTMLButtonElement).onclick = () => { doc.comp.wm = "logo"; buildRight(); renderCanvas(); };
-  (wp as HTMLButtonElement).onclick = () => { doc.comp.wm = "pill"; buildRight(); renderCanvas(); };
-  wmRow.appendChild(wmSeg);
-  into.appendChild(wmRow);
-
   if (doc.comp.layout === "panel") {
     const f = h(`<div class="field"><label>Panel color</label></div>`);
     f.appendChild(
@@ -339,6 +330,35 @@ function photoControls(into: HTMLElement) {
     f.appendChild(r);
     into.appendChild(f);
   }
+}
+
+// The signature — the F·O·L·D net mark in the corner. Always present, always
+// tunable: the net is the logo.
+function sigControls(into: HTMLElement) {
+  if (!docTemplate(doc).composed) return;
+  into.appendChild(h(`<h3 class="panel-title">Signature · F·O·L·D net</h3>`));
+  into.appendChild(
+    h(`<div class="note">The name held together — a membrane, a web, or ridge lines.
+      Every piece carries one; reroll until it feels right.</div>`)
+  );
+  for (const p of SIG_PARAMS) {
+    const f = h(`<div class="field"><label>${p.label}</label></div>`);
+    const r = h(
+      `<input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${doc.comp.sig.params[p.key]}">`
+    ) as HTMLInputElement;
+    r.oninput = () => {
+      doc.comp.sig.params[p.key] = Number(r.value);
+      renderCanvas();
+    };
+    f.appendChild(r);
+    into.appendChild(f);
+  }
+  const reroll = h(`<button class="mini" style="margin-bottom:14px">↻ Reroll signature</button>`);
+  reroll.onclick = () => {
+    doc.comp.sig.seed = Math.floor(Math.random() * 100000);
+    renderCanvas();
+  };
+  into.appendChild(reroll);
 }
 
 function composedWordControls(into: HTMLElement) {
@@ -624,6 +644,7 @@ function buildRight() {
   compControls(rightPanel);
   photoControls(rightPanel);
   fieldControls(rightPanel);
+  sigControls(rightPanel);
   motifControls(rightPanel);
   lineControls(rightPanel);
   diagramControls(rightPanel);

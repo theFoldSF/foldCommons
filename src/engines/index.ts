@@ -7,12 +7,9 @@ import dither from "./dither.js";
 import dotfield from "./dotField.js";
 import network from "./foldNetwork.js";
 import weave from "./gridWeave.js";
-import fold from "./foldedSurface.js";
 import flow from "./flowField.js";
 import graph from "./graph.js";
 import quilt from "./quilt.js";
-import wrap from "./pointFold.js";
-import { rng } from "./util.js";
 
 export interface EngineParam {
   key: string;
@@ -40,38 +37,18 @@ export interface Engine {
   }): string;
 }
 
-// Point fold was click-interactive in brand-studio; here it self-seeds its
-// anchor points so it works as a pure parametric engine (reroll to re-scatter).
-const seededWrap: Engine = {
-  ...(wrap as Engine),
-  blurb: "A curved surface folds and wraps around scattered anchor points.",
-  params: (wrap as Engine).params.filter((p) => p.key !== "anchors" && p.key !== "grid"),
-  render(ctx) {
-    const r = rng(ctx.seed);
-    const n = 4 + Math.floor(r() * 4);
-    const points = Array.from({ length: n }, () => ({
-      x: ctx.w * (0.18 + r() * 0.64),
-      y: ctx.h * (0.18 + r() * 0.64),
-    }));
-    return (wrap as Engine).render({
-      ...ctx,
-      p: { ...ctx.p, grid: 0, anchors: 0 },
-      data: { points },
-    });
-  },
-};
+// The F·O·L·D net is the signature mark — always present in the corner of
+// every composed layout, so it lives outside the pickable motif list.
+export const SIGNATURE_ENGINE = network as Engine;
 
 export const ENGINES: Engine[] = [
   mesh as Engine,
   dither as Engine,
   dotfield as Engine,
-  network as Engine,
   weave as Engine,
-  fold as Engine,
   quilt as Engine,
   graph as Engine,
   flow as Engine,
-  seededWrap,
 ];
 
 export const engineById = (id: string) => ENGINES.find((e) => e.id === id);

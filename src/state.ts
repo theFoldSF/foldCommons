@@ -4,7 +4,7 @@
 // which is what makes shared/remixed docs safe by construction.
 
 import { GROUNDS, REGISTERS, SEASONS, type RegisterKey, LINE_MOTIF } from "./brand/tokens";
-import { ENGINES, defaultParams, engineById } from "./engines/index";
+import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById } from "./engines/index";
 import { FRAMES } from "./frames/index";
 import { TEMPLATES, templateById, type Template } from "./templates/index";
 import { MARKS } from "./marks/index";
@@ -43,6 +43,13 @@ export const LAYOUTS: { key: LayoutKey; label: string; blurb: string }[] = [
 // text can never sit on a bare photo.
 export const BG_FADE = { min: 0.5, max: 0.92, default: 0.78 };
 
+// The signature: the F·O·L·D net motif, always present in the corner. Its
+// params are the network engine's, minus tiles (a signature is one mark).
+export interface SigState {
+  seed: number;
+  params: Record<string, number>;
+}
+
 export interface CompState {
   layout: LayoutKey;
   frame: string; // frame shape id
@@ -52,7 +59,7 @@ export interface CompState {
   bg: string; // photo id used as full-bleed background texture; "" = plain ground
   bgFade: number; // ground-color wash over the texture (BG_FADE range)
   panelAccent: number; // panel fill / photo-less hero fill
-  wm: "logo" | "pill"; // chunky FOLD logotype or "the Fold" pill
+  sig: SigState; // the F·O·L·D net signature mark
   chipAccents: [number, number]; // date chip, time chip
 }
 
@@ -71,6 +78,14 @@ export interface Doc {
   diagram: DiagramState;
   stickers: { ids: string[]; accent: number };
   name?: string;
+}
+
+// Signature params: the network engine's, minus tiles — one mark, one corner.
+export const SIG_PARAMS = SIGNATURE_ENGINE.params.filter((p) => p.key !== "tiles");
+
+export function defaultSigParams(): Record<string, number> {
+  // engine defaults, pulled in tighter — a signature is one held cluster
+  return { ...Object.fromEntries(SIG_PARAMS.map((p) => [p.key, p.default])), scatter: 0.55 };
 }
 
 export function newDoc(templateId: string): Doc {
@@ -100,7 +115,7 @@ export function newDoc(templateId: string): Doc {
       bg: "",
       bgFade: BG_FADE.default,
       panelAccent: 0,
-      wm: "logo",
+      sig: { seed: 7, params: defaultSigParams() },
       chipAccents: [0, 2],
     },
     motif: t.composed || t.motifSlot
@@ -162,11 +177,18 @@ export function shuffleComp(doc: Doc) {
     doc.comp.bgFade = BG_FADE.min + Math.random() * (BG_FADE.max - BG_FADE.min);
   } else doc.comp.bg = "";
   doc.comp.panelAccent = Math.floor(Math.random() * 4);
-  doc.comp.wm = pick(["logo", "logo", "pill"]);
+  doc.comp.sig.seed = Math.floor(Math.random() * 100000);
   doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
   doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
   doc.register = docGround(doc).register;
-  if (doc.motif) doc.motif.seed = Math.floor(Math.random() * 100000);
+  // a different motif engine each roll, with fresh defaults and a fresh seed
+  const engine = pick(ENGINES);
+  doc.motif = {
+    engine: engine.id,
+    seed: Math.floor(Math.random() * 100000),
+    params: defaultParams(engine),
+    accents: doc.motif?.accents ?? [4, 0],
+  };
 }
 
 export function docSeason(doc: Doc) {
@@ -202,7 +224,17 @@ export function sanitize(doc: Doc): Doc {
   doc.comp.bgFade = Number.isFinite(doc.comp.bgFade)
     ? Math.min(BG_FADE.max, Math.max(BG_FADE.min, doc.comp.bgFade))
     : BG_FADE.default;
-  if (doc.comp.wm !== "logo" && doc.comp.wm !== "pill") doc.comp.wm = "logo";
+  // signature: fill defaults (covers pre-signature docs), clamp to canon ranges
+  if (!doc.comp.sig || typeof doc.comp.sig !== "object")
+    doc.comp.sig = { seed: 7, params: defaultSigParams() };
+  doc.comp.sig.seed = Number.isFinite(doc.comp.sig.seed) ? doc.comp.sig.seed >>> 0 : 7;
+  const sp: Record<string, number> = {};
+  for (const p of SIG_PARAMS) {
+    const v = Number(doc.comp.sig.params?.[p.key]);
+    sp[p.key] = Number.isFinite(v) ? Math.min(p.max, Math.max(p.min, v)) : p.default;
+  }
+  doc.comp.sig.params = sp;
+  delete (doc.comp as unknown as Record<string, unknown>)["wm"];
   doc.comp.panelAccent = Number.isFinite(doc.comp.panelAccent) ? Math.round(doc.comp.panelAccent) : 0;
   const ca = doc.comp.chipAccents;
   doc.comp.chipAccents = [
