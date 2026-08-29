@@ -118,37 +118,23 @@ function buildLeft() {
     leftPanel.appendChild(card);
   }
 
-  if (docTemplate(doc).composed) {
-    leftPanel.appendChild(h(`<h3 class="panel-title">Ground</h3>`));
-    const chips = h(`<div class="chips"></div>`);
-    GROUNDS.forEach((g, i) => {
-      const c = h(
-        `<button class="chip ${doc.ground === i ? "active" : ""}" style="background:${g.hex}" title="${g.label}"></button>`
-      );
-      c.onclick = () => {
-        doc.ground = i;
-        doc.register = g.register;
-        buildAll();
-      };
-      chips.appendChild(c);
-    });
-    leftPanel.appendChild(chips);
-    leftPanel.appendChild(
-      h(`<div class="note">Any canon color can carry the whole piece — the ink adjusts itself.</div>`)
+  leftPanel.appendChild(h(`<h3 class="panel-title">Ground</h3>`));
+  const gchips = h(`<div class="chips"></div>`);
+  GROUNDS.forEach((g, i) => {
+    const c = h(
+      `<button class="chip ${doc.ground === i ? "active" : ""}" style="background:${g.hex}" title="${g.label}"></button>`
     );
-  } else {
-    leftPanel.appendChild(h(`<h3 class="panel-title">Register</h3>`));
-    const seg = h(`<div class="seg"></div>`);
-    (Object.keys(REGISTERS) as RegisterKey[]).forEach((k) => {
-      const b = h(`<button class="${doc.register === k ? "active" : ""}">${REGISTERS[k].label}</button>`);
-      b.onclick = () => {
-        doc.register = k;
-        buildAll();
-      };
-      seg.appendChild(b);
-    });
-    leftPanel.appendChild(seg);
-  }
+    c.onclick = () => {
+      doc.ground = i;
+      doc.register = g.register;
+      buildAll();
+    };
+    gchips.appendChild(c);
+  });
+  leftPanel.appendChild(gchips);
+  leftPanel.appendChild(
+    h(`<div class="note">Any canon color can carry the whole piece — the ink adjusts itself.</div>`)
+  );
 
   if (!docTemplate(doc).composed) {
     leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
@@ -364,16 +350,18 @@ function sigControls(into: HTMLElement) {
 function composedWordControls(into: HTMLElement) {
   const t = docTemplate(doc);
   into.appendChild(h(`<h3 class="panel-title">Words</h3>`));
-  const fields: { id: string; label: string; chip?: 0 | 1 }[] = [
+  const fields: { id: string; label: string; chip?: 0 | 1; multi?: boolean }[] = [
     { id: "title", label: "Title" },
-    { id: "detail", label: "Details (optional)" },
+    { id: "prose", label: "Prose (optional — gets its own framed card)", multi: true },
     { id: "date", label: "Date chip", chip: 0 },
     { id: "time", label: "Time chip", chip: 1 },
   ];
   for (const fdef of fields) {
     const f = h(`<div class="field"><label>${fdef.label}</label></div>`);
     const input = h(
-      `<input type="text" value="${(doc.fields[fdef.id] ?? "").replaceAll('"', "&quot;")}">`
+      fdef.multi
+        ? `<textarea rows="3">${(doc.fields[fdef.id] ?? "").replaceAll("<", "&lt;")}</textarea>`
+        : `<input type="text" value="${(doc.fields[fdef.id] ?? "").replaceAll('"', "&quot;")}">`
     ) as HTMLInputElement;
     input.oninput = () => {
       doc.fields[fdef.id] = input.value;
@@ -786,6 +774,11 @@ buildAll();
 // is on screen once each lands.
 const refresh = () => {
   sanitize(doc);
+  // header wordmark: the chunky FOLD logotype, once its paths are loaded
+  const logo = MARKS.find((m) => m.id === "fold-logotype");
+  const wm = document.querySelector("#topbar .wordmark");
+  if (logo && wm && !wm.querySelector("svg"))
+    wm.innerHTML = `<svg viewBox="${logo.viewBox}" color="var(--ink)" role="img" aria-label="the Fold">${logo.svg}</svg>`;
   buildAll();
   if ($("#canonView").classList.contains("active")) buildCanon();
   if ($("#galleryView").classList.contains("active")) buildGallery();

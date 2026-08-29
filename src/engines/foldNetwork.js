@@ -44,18 +44,38 @@ function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
   const fs = S * 0.11 * p.size;
   const lw = p.weight * S / 700;
 
-  // scatter the four letters with a minimum spacing (rejection sampling)
-  const spread = 0.5 * p.scatter;
+  // The letters always read F→O→L→D: usually one line, sometimes FO over LD.
+  // Spacing is built from the letters' own sizes, so they can never overlap —
+  // scatter only loosens the gaps and the vertical drift.
+  const sc = p.scatter;
+  const fss = LETTERS.map(() => fs * (0.8 + r() * 0.55));
+  const rows =
+    r() < 0.28 && th > fs * 3.4 ? [[0, 1], [2, 3]] : [[0, 1, 2, 3]];
   const pts = [];
-  for (let i = 0; i < 4; i++) {
-    let x = 0, y = 0;
-    for (let tries = 0; tries < 40; tries++) {
-      x = x0 + tw * (0.5 + (r() - 0.5) * 2 * spread * 0.8);
-      y = y0 + th * (0.5 + (r() - 0.5) * 2 * spread * 0.8);
-      if (pts.every((q) => Math.hypot(q.x - x, q.y - y) > fs * 1.7)) break;
-    }
-    pts.push({ x, y, ch: LETTERS[i], fs: fs * (0.8 + r() * 0.55) });
-  }
+  const rowGap = Math.max(...fss) * 1.5 + fs * 0.5 * sc;
+  rows.forEach((row, ri) => {
+    // advance x by the half-widths of neighbouring letters plus a seeded gap
+    const xs = [0];
+    for (let k = 1; k < row.length; k++)
+      xs.push(xs[k - 1] + (fss[row[k - 1]] + fss[row[k]]) * 0.42 + fs * (0.25 + r() * 1.1 * sc));
+    const total = xs[xs.length - 1];
+    const fit = Math.min(1, (tw * 0.82) / Math.max(1, total));
+    const rowCx = x0 + tw / 2 + (rows.length > 1 ? (r() - 0.5) * tw * 0.14 * sc : 0);
+    const rowCy =
+      rows.length === 1
+        ? y0 + th * (0.5 + (r() - 0.5) * 0.22 * sc)
+        : y0 + th / 2 + (ri === 0 ? -rowGap / 2 : rowGap / 2);
+    row.forEach((li, k) => {
+      // vertical drift stays under half the row gap — rows can't collide
+      const drift = (r() - 0.5) * Math.min(fs * 0.9 * sc, rowGap * 0.4);
+      pts.push({
+        x: rowCx - (total * fit) / 2 + xs[k] * fit,
+        y: rowCy + drift,
+        ch: LETTERS[li],
+        fs: fss[li],
+      });
+    });
+  });
 
   let out = "";
   if (style === 0) out += membrane(pts, r, S, ink, lw);

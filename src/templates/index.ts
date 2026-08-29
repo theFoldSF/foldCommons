@@ -53,7 +53,7 @@ export interface Template {
 
 const composedZones = (title: string): TextZone[] => [
   { id: "title", label: "Title", role: "heading", x: 0, y: 0, w: 0, size: 0, align: "start", default: title },
-  { id: "detail", label: "Details (optional)", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "" },
+  { id: "prose", label: "Prose (optional)", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "", lines: 10 },
   { id: "date", label: "Date chip", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "Thurs Jul 2", colorable: true },
   { id: "time", label: "Time chip", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "9pm", colorable: true },
 ];
@@ -125,7 +125,7 @@ export const TEMPLATES: Template[] = [
     register: "paper",
     allowRegisterSwitch: true,
     zones: [
-      { id: "title", label: "Title", role: "display", x: 80, y: 96, w: 1200, size: 54, align: "start", default: "How it works", lines: 1, colorable: true },
+      { id: "title", label: "Title", role: "heading", x: 80, y: 96, w: 1200, size: 54, align: "start", default: "How it works", lines: 1, colorable: true },
     ],
     line: { y: 0.16 },
     wordmark: { x: 1520, y: 950, size: 22, align: "end" },

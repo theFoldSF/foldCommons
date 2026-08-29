@@ -18,6 +18,7 @@ export default {
     { key: "strands", label: "Strands", min: 1, max: 3, step: 1, default: 2 },
     { key: "hand", label: "Hand-drawn", min: 0, max: 1, step: 0.01, default: 0.5 },
     { key: "weight", label: "Thread weight", min: 1, max: 5, step: 0.05, default: 2.4 },
+    { key: "cuts", label: "Under-passes", min: 0, max: 1, step: 1, default: 0 },
   ],
 
   render({ w, h, p, colors, ink, seed }) {
@@ -78,6 +79,12 @@ export default {
           Math.sin(a * 3 + wob) * p.amp * 0.35 * p.hand;
         const rad = R0 * (1 + swing);
         pts.push([cx + Math.cos(a) * rad, cy + Math.sin(a) * rad]);
+      }
+      // Continuous by default: the thread rides over the lattice as one
+      // unbroken loop. Under-passes (the woven over/under read) are opt-in.
+      if (!p.cuts) {
+        out += `<path d="${smoothPath(pts.map(([x, y]) => ({ x, y })), { closed: true, tension: 0.6 })}" fill="none" stroke="${ink}" stroke-width="${tw}" stroke-linecap="round"/>`;
+        continue;
       }
       // find grid-line crossings along the loop; every other one (rate-limited
       // so dense crossing stretches don't erase the thread) becomes an

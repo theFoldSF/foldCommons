@@ -43,7 +43,10 @@ body {
   font-weight: 600;
   color: var(--ink);
   font-size: 19px;
+  display: flex;
+  align-items: center;
 }
+.wordmark svg { height: 20px; width: auto; display: block; }
 .app-name {
   font-family: "Fira Code", monospace;
   color: var(--ink);
@@ -55,16 +58,18 @@ body {
 #nav { margin-left: auto; display: flex; gap: 4px; }
 #nav button {
   background: none;
-  border: 1px solid transparent;
+  border: 1.5px solid transparent;
   color: var(--ink);
-  font-family: "Fira Code", monospace;
-  font-size: 12.5px;
-  padding: 7px 14px;
+  font-family: "Figtree", sans-serif;
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 7px 16px;
   cursor: pointer;
-  border-radius: 2px;
+  border-radius: 999px;
 }
 #nav button:hover { border-color: var(--rule); }
 #nav button.active { border-color: var(--ink); background: var(--ink); color: var(--cream); }
+#nav button:not(.active):hover { border-color: var(--ink); }
 
 /* views */
 #views { flex: 1; min-height: 0; }
@@ -100,19 +105,20 @@ body {
   max-width: 100%;
   max-height: calc(100vh - 160px);
   height: auto;
-  box-shadow: 0 10px 40px rgba(3, 7, 27, 0.16);
-  border: 1px solid var(--rule);
+  box-shadow: 0 14px 44px rgba(3, 7, 27, 0.18);
+  border-radius: 6px;
 }
 
 /* panel bits */
 h3.panel-title {
-  font-family: "Fira Code", monospace;
-  font-size: 10.5px;
-  letter-spacing: 0.18em;
+  font-family: "Figtree", sans-serif;
+  font-weight: 800;
+  font-size: 12.5px;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--ink);
-  opacity: 0.6;
-  margin: 22px 0 10px;
+  opacity: 0.75;
+  margin: 24px 0 10px;
 }
 h3.panel-title:first-child { margin-top: 0; }
 
@@ -120,8 +126,8 @@ h3.panel-title:first-child { margin-top: 0; }
   width: 100%;
   text-align: left;
   background: var(--cream);
-  border: 1px solid var(--rule);
-  border-radius: 2px;
+  border: 1.5px solid var(--rule);
+  border-radius: 12px;
   color: var(--ink);
   padding: 10px 12px;
   margin-bottom: 8px;
@@ -129,21 +135,23 @@ h3.panel-title:first-child { margin-top: 0; }
   font-family: "Figtree", sans-serif;
 }
 .tpl-card:hover { border-color: var(--ink); }
-.tpl-card.active { border-color: var(--ink); box-shadow: 2px 2px 0 var(--ink); }
+.tpl-card.active { border-color: var(--ink); box-shadow: 3px 3px 0 var(--ink); }
 .tpl-card .t { font-weight: 600; font-size: 14.5px; }
 .tpl-card .b { font-size: 12px; opacity: 0.6; margin-top: 2px; }
 
 .seg { display: flex; gap: 6px; flex-wrap: wrap; }
 .seg button {
   background: var(--cream);
-  border: 1px solid var(--rule);
+  border: 1.5px solid var(--rule);
   color: var(--ink);
-  font-family: "Fira Code", monospace;
-  font-size: 11.5px;
-  padding: 6px 10px;
-  border-radius: 2px;
+  font-family: "Figtree", sans-serif;
+  font-weight: 600;
+  font-size: 12.5px;
+  padding: 6px 13px;
+  border-radius: 999px;
   cursor: pointer;
 }
+.seg button:not(.active):hover { border-color: var(--ink); }
 .seg button.active { background: var(--ink); border-color: var(--ink); color: var(--cream); }
 
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -155,7 +163,9 @@ h3.panel-title:first-child { margin-top: 0; }
   cursor: pointer;
   padding: 0;
 }
-.chip.active { border: 2px solid var(--ink); box-shadow: 0 0 0 2px var(--cream); }
+.chip.active { border: 2px solid var(--ink); box-shadow: 0 0 0 3px var(--cream), 2px 2px 0 3px var(--ink); }
+.chip:hover { transform: scale(1.12); }
+.chip { transition: transform 0.12s; }
 
 .field { margin-bottom: 14px; }
 .field label {
@@ -174,8 +184,8 @@ h3.panel-title:first-child { margin-top: 0; }
   color: var(--ink);
   font-family: "Figtree", sans-serif;
   font-size: 14px;
-  padding: 8px;
-  border-radius: 2px;
+  padding: 9px 11px;
+  border-radius: 10px;
 }
 .field input[type="text"]:focus, .field textarea:focus, .field select:focus {
   outline: none;
@@ -190,12 +200,13 @@ h3.panel-title:first-child { margin-top: 0; }
 
 button.act {
   background: var(--ink);
-  border: 1px solid var(--ink);
+  border: 1.5px solid var(--ink);
   color: var(--cream);
-  font-family: "Fira Code", monospace;
-  font-size: 12.5px;
-  padding: 10px 12px;
-  border-radius: 2px;
+  font-family: "Figtree", sans-serif;
+  font-weight: 700;
+  font-size: 13.5px;
+  padding: 11px 12px;
+  border-radius: 999px;
   cursor: pointer;
   width: 100%;
   margin-bottom: 8px;
@@ -209,13 +220,14 @@ button.act.ghost {
 button.act.ghost:hover { border-color: var(--ink); }
 button.mini {
   background: var(--cream);
-  border: 1px solid var(--rule);
+  border: 1.5px solid var(--rule);
   color: var(--ink);
-  border-radius: 2px;
+  border-radius: 999px;
   cursor: pointer;
-  font-family: "Fira Code", monospace;
-  font-size: 11.5px;
-  padding: 4px 8px;
+  font-family: "Figtree", sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 5px 11px;
   flex: 0 0 auto;
 }
 button.mini:hover { border-color: var(--ink); }
@@ -234,8 +246,8 @@ button.mini:hover { border-color: var(--ink); }
 #galleryView.active { display: flex; }
 .g-card {
   width: 240px;
-  border: 1px solid var(--rule);
-  border-radius: 2px;
+  border: 1.5px solid var(--rule);
+  border-radius: 14px;
   overflow: hidden;
   background: var(--cream-2);
 }

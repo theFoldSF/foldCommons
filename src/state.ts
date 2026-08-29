@@ -4,7 +4,7 @@
 // which is what makes shared/remixed docs safe by construction.
 
 import { GROUNDS, REGISTERS, SEASONS, type RegisterKey, LINE_MOTIF } from "./brand/tokens";
-import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById } from "./engines/index";
+import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById, shuffleParams } from "./engines/index";
 import { FRAMES } from "./frames/index";
 import { TEMPLATES, templateById, type Template } from "./templates/index";
 import { MARKS } from "./marks/index";
@@ -181,12 +181,12 @@ export function shuffleComp(doc: Doc) {
   doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
   doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
   doc.register = docGround(doc).register;
-  // a different motif engine each roll, with fresh defaults and a fresh seed
+  // a different motif engine each roll, params drawn from curated ranges
   const engine = pick(ENGINES);
   doc.motif = {
     engine: engine.id,
     seed: Math.floor(Math.random() * 100000),
-    params: defaultParams(engine),
+    params: shuffleParams(engine),
     accents: doc.motif?.accents ?? [4, 0],
   };
 }
@@ -242,6 +242,9 @@ export function sanitize(doc: Doc): Doc {
     Number.isFinite(ca?.[1]) ? Math.round(ca[1]) : 2,
   ];
   doc.fields = { ...fresh.fields, ...(doc.fields ?? {}) };
+  // pre-prose docs kept a short "detail" line — carry it into the prose card
+  if (!doc.fields.prose?.trim() && doc.fields.detail?.trim())
+    doc.fields.prose = doc.fields.detail;
   doc.v = 2;
   // register follows the ground — text stays readable by construction
   doc.register = docGround(doc).register;

@@ -1,7 +1,7 @@
 // render.ts — Doc → SVG. One renderer for the on-screen canvas, gallery
 // thumbnails, and exports, so what you see is exactly what ships.
 
-import { REGISTERS, TYPE_RULES, isDark, type TypeRole } from "./brand/tokens";
+import { TYPE_RULES, isDark, type TypeRole } from "./brand/tokens";
 import { fontFamilyCss } from "./brand/fonts";
 import { SIGNATURE_ENGINE, engineById } from "./engines/index";
 import { framePath, ticketPath } from "./frames/index";
@@ -71,7 +71,7 @@ function motifSvg(doc: Doc, W: number, H: number): string {
   if (!doc.motif || !t.motifSlot) return "";
   const e = engineById(doc.motif.engine);
   if (!e) return "";
-  const reg = REGISTERS[doc.register];
+  const g = docGround(doc);
   const slot = t.motifSlot === "backdrop" ? { x: 0, y: 0, w: W, h: H } : t.motifSlot;
   const colors = doc.motif.accents.map((i) => docAccent(doc, i));
   const inner = e.render({
@@ -79,21 +79,13 @@ function motifSvg(doc: Doc, W: number, H: number): string {
     h: slot.h,
     p: doc.motif.params,
     colors,
-    ink: reg.ink,
-    ground: reg.ground,
+    ink: g.ink,
+    ground: g.hex,
     seed: doc.motif.seed,
   });
   const dim = t.motifSlot === "backdrop" ? ` opacity="0.5"` : "";
   return `<svg x="${slot.x}" y="${slot.y}" width="${slot.w}" height="${slot.h}"
     viewBox="0 0 ${slot.w} ${slot.h}" overflow="hidden"${dim}>${inner}</svg>`;
-}
-
-function wordmarkSvg(doc: Doc, ink: string): string {
-  const { wordmark } = docTemplate(doc);
-  const wm = TYPE_RULES.wordmark;
-  return `<text x="${wordmark.x}" y="${wordmark.y}" text-anchor="${wordmark.align}" fill="${ink}"
-    font-family="${fontFamilyCss(wm.face)}" font-size="${wordmark.size}" font-weight="${wm.weight}"
-    letter-spacing="${wm.tracking * wordmark.size}">${wm.text}</text>`;
 }
 
 // --- the frame composer (poster / story / post) ------------------------------
@@ -212,32 +204,72 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const m = c.margin;
   const comp = doc.comp;
   const title = (doc.fields.title ?? "").trim();
-  const detail = (doc.fields.detail ?? "").trim();
   const bg = bgTextureSvg(doc, W, H);
 
-  // Bottom band: the F·O·L·D net signature left, chips right — every layout.
-  const sigH = c.logoH * 2.8;
-  const sigW = c.logoH * 7;
-  const rowCy = H - m + m * 0.35 - sigH / 2;
-  let bottom = signatureSvg(doc, m * 0.7, rowCy - sigH / 2, sigW, sigH, ink);
+  // Bottom band — ONE line: net signature · title · date/time chips.
+  const sigH = c.logoH * 2.1;
+  const sigW = c.logoH * 4.6;
+  const bandH = Math.max(sigH, c.titleSize * 1.1);
+  const rowCy = H - m * 0.8 - bandH / 2;
+  let bottom = signatureSvg(doc, m * 0.55, rowCy - sigH / 2, sigW, sigH, ink);
   let right = W - m;
   const time = chipSvg(doc.fields.time ?? "", docAccent(doc, comp.chipAccents[1]), right, rowCy, c.chipSize, comp.frameSeed + 1);
   right -= time.w ? time.w + c.chipSize * 0.6 : 0;
   const date = chipSvg(doc.fields.date ?? "", docAccent(doc, comp.chipAccents[0]), right, rowCy, c.chipSize, comp.frameSeed + 2);
   bottom += time.svg + date.svg;
+  right -= date.w ? date.w + c.chipSize * 0.8 : 0;
+  if (title) {
+    // shrink-to-fit between the signature and the chips — never overlaps
+    const titleX = m * 0.55 + sigW + c.titleSize * 0.5;
+    const maxW = Math.max(60, right - titleX);
+    let tSize = c.titleSize;
+    if (title.length * tSize * 0.55 > maxW)
+      tSize = Math.max(c.titleSize * 0.45, maxW / (title.length * 0.55));
+    bottom += `<text x="${titleX.toFixed(1)}" y="${(rowCy + tSize * 0.34).toFixed(1)}" fill="${ink}"
+      font-family="${fontFamilyCss(heading().name)}" font-size="${tSize.toFixed(1)}"
+      font-weight="${heading().weight}">${esc(title)}</text>`;
+  }
 
-  // Title block above the bottom band.
-  const titleY = H - m - sigH - m * 0.35 - (detail ? c.detailSize * 1.5 : 0);
+  // Prose card — multi-line body copy in its own frame, above the band.
+  const prose = (doc.fields.prose ?? "").trim();
   let text = "";
-  if (title)
-    text += `<text x="${m}" y="${titleY}" fill="${ink}" font-family="${fontFamilyCss(heading().name)}"
-      font-size="${c.titleSize}" font-weight="${heading().weight}">${esc(title)}</text>`;
-  if (detail)
-    text += `<text x="${m}" y="${titleY + c.detailSize * 1.6}" fill="${ink}" font-family="${fontFamilyCss(bodyFace().name)}"
-      font-size="${c.detailSize}" font-weight="${bodyFace().weight}">${esc(detail)}</text>`;
+  let proseTop = H - m * 0.8 - bandH - m * 0.45;
+  if (prose) {
+    const pad = c.detailSize * 1.15;
+    const pw = W - m * 2;
+    const perLine = Math.max(8, Math.floor((pw - pad * 2) / (c.detailSize * 0.5)));
+    const lines: string[] = [];
+    for (const para of prose.split("\n")) {
+      let line = "";
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        const cand = line ? `${line} ${word}` : word;
+        if (cand.length > perLine && line) {
+          lines.push(line);
+          line = word;
+        } else line = cand;
+      }
+      lines.push(line);
+    }
+    const shown = lines.slice(0, 10);
+    const lh = c.detailSize * 1.5;
+    const ph = pad * 2 + shown.length * lh;
+    const py = proseTop - ph;
+    // designer shapes keep their own aspect — the card needs a stretchy frame
+    const cardFrame = comp.frame === "blob" || comp.frame === "drape" ? "wobble" : comp.frame;
+    const fp = framePath(cardFrame, comp.frameSeed + 9, pw, ph);
+    const tspans = shown
+      .map((l, i) => `<tspan x="${pad}" dy="${i === 0 ? 0 : lh}">${esc(l)}</tspan>`)
+      .join("");
+    text += `<g transform="translate(${m} ${py.toFixed(1)})">
+      <path d="${fp.d}"${fp.transform ? ` transform="${fp.transform}"` : ""} fill="${g.hex}" stroke="${ink}" stroke-width="2"/>
+      <text x="${pad}" y="${pad + c.detailSize * 0.85}" fill="${ink}"
+        font-family="${fontFamilyCss(bodyFace().name)}" font-size="${c.detailSize}"
+        font-weight="${bodyFace().weight}">${tspans}</text></g>`;
+    proseTop = py - m * 0.45;
+  }
 
   const heroTop = m;
-  const heroBottom = title || detail ? titleY - c.titleSize - m * 0.5 : H - m - sigH - m * 0.35;
+  const heroBottom = proseTop;
 
   if (comp.layout === "hero" || comp.layout === "panel") {
     const win = frameWindow(doc, m * 0.7, heroTop, W - m * 1.4, heroBottom - heroTop,
@@ -278,11 +310,11 @@ function composedSvg(doc: Doc, W: number, H: number): string {
 function diagramSvg(doc: Doc, W: number, H: number, ink: string, ground: string): string {
   const d = doc.diagram;
   if (!d.nodes.length) return "";
-  const face = TYPE_RULES.byRole("mono")[0];
-  const boxH = 88;
-  const gap = 72;
-  const pad = 34;
-  const widths = d.nodes.map((n) => Math.max(150, n.label.length * 13.5 + pad * 2));
+  const fsize = 26;
+  const boxH = 84;
+  const gap = 84;
+  const pad = 30;
+  const widths = d.nodes.map((n) => Math.max(150, n.label.length * fsize * 0.56 + pad * 2));
   const total =
     d.dir === "lr" ? widths.reduce((a, b) => a + b, 0) + gap * (d.nodes.length - 1) : 0;
   let cx = (W - total) / 2;
@@ -296,9 +328,9 @@ function diagramSvg(doc: Doc, W: number, H: number, ink: string, ground: string)
       centers.push({ x: W / 2, y: y0, w: widths[i] });
     }
   });
-  let out = `<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
-    markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="${ink}" stroke-width="1.6" stroke-linecap="round"/>
+  let out = `<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5"
+    markerHeight="6.5" orient="auto-start-reverse">
+    <path d="M 0 1.5 L 9 5 L 0 8.5" fill="none" stroke="${ink}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   </marker></defs>`;
   for (const [a, b] of d.edges) {
     const A = centers[a], B = centers[b];
@@ -318,14 +350,15 @@ function diagramSvg(doc: Doc, W: number, H: number, ink: string, ground: string)
     out += `<path d="M ${x1} ${y1} Q ${mx} ${my + sag}, ${x2} ${y2}" fill="none"
       stroke="${ink}" stroke-width="2.4" marker-end="url(#arrow)"/>`;
   }
+  // nodes as ticket chips — same language as the date/time chips
   d.nodes.forEach((n, i) => {
     const c = centers[i];
     const accent = docAccent(doc, n.accent);
-    out += `<rect x="${c.x - c.w / 2}" y="${c.y - boxH / 2}" width="${c.w}" height="${boxH}"
-      rx="6" fill="${accent}" fill-opacity="0.16" stroke="${accent}" stroke-width="2.5"/>`;
-    out += `<text x="${c.x}" y="${c.y + 6}" text-anchor="middle" fill="${ink}"
-      font-family="${fontFamilyCss(face.name)}" font-size="24" font-weight="${face.weight}"
-      letter-spacing="1">${esc(n.label.toUpperCase())}</text>`;
+    const chipInk = isDark(accent) ? "#FFF9F1" : "#03071B";
+    out += `<g transform="translate(${(c.x - c.w / 2).toFixed(1)} ${(c.y - boxH / 2).toFixed(1)})">
+      <path d="${ticketPath(i * 131 + 7, c.w, boxH)}" fill="${accent}"/>
+      <text x="${c.w / 2}" y="${boxH / 2}" text-anchor="middle" dominant-baseline="central" fill="${chipInk}"
+        font-family="${fontFamilyCss("Figtree")}" font-size="${fsize}" font-weight="600">${esc(n.label)}</text></g>`;
   });
   return out;
 }
@@ -344,10 +377,19 @@ function stickersSvg(doc: Doc, W: number, H: number): string {
     const m = markById(id);
     if (!m) return;
     const col = i % cols, row = Math.floor(i / cols);
-    const pad = cell * 0.12;
+    const gap = cell * 0.05;
     const color = docAccent(doc, doc.stickers.accent + i);
-    out += `<svg x="${ox + col * cell + pad}" y="${oy + row * cell + pad}"
-      width="${cell - pad * 2}" height="${cell - pad * 2}" viewBox="${m.viewBox}"
+    // die-cut backing: a scalloped cream shape with a cut line, mark inside
+    const bx = ox + col * cell + gap;
+    const by = oy + row * cell + gap;
+    const bs = cell - gap * 2;
+    const back = framePath("scallop", i * 271 + 11, bs, bs);
+    const pad = cell * 0.19;
+    out += `<g transform="translate(${bx.toFixed(1)} ${by.toFixed(1)})">
+      <path d="${back.d}" fill="#FFF9F1" stroke="#03071B" stroke-opacity="0.25" stroke-width="2" stroke-dasharray="7 6"/>
+    </g>
+    <svg x="${(ox + col * cell + pad).toFixed(1)}" y="${(oy + row * cell + pad).toFixed(1)}"
+      width="${(cell - pad * 2).toFixed(1)}" height="${(cell - pad * 2).toFixed(1)}" viewBox="${m.viewBox}"
       color="${color}">${m.svg}</svg>`;
   });
   return out;
@@ -367,15 +409,19 @@ export function renderDoc(doc: Doc, opts: { fontCss?: string } = {}): string {
       ${composedSvg(doc, W, H)}
     </svg>`;
   }
-  const reg = REGISTERS[doc.register];
-  const ground = reg.ground;
-  const ink = reg.ink;
+  // diagram & stickers share the composed language: any canon ground, the
+  // net signature in the corner, chips and die-cuts instead of plain boxes.
+  const g = docGround(doc);
+  const ground = g.hex;
+  const ink = g.ink;
   const body =
     t.kind === "diagram"
       ? diagramSvg(doc, W, H, ink, ground)
       : t.kind === "stickers"
         ? stickersSvg(doc, W, H)
         : "";
+  const logoBase = Math.min(W, H) * 0.028;
+  const sig = signatureSvg(doc, W * 0.035, H - W * 0.035 - logoBase * 2.1, logoBase * 4.6, logoBase * 2.1, ink);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
     ${style}
     <rect width="${W}" height="${H}" fill="${ground}"/>
@@ -383,6 +429,6 @@ export function renderDoc(doc: Doc, opts: { fontCss?: string } = {}): string {
     ${lineMotifSvg(doc, W, H)}
     ${body}
     ${t.zones.map((z) => textZoneSvg(doc, z, ink)).join("\n")}
-    ${wordmarkSvg(doc, ink)}
+    ${sig}
   </svg>`;
 }

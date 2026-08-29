@@ -62,16 +62,36 @@ export function framePath(id: string, seed: number, w: number, h: number): { d: 
   const m = Math.min(w, h);
 
   if (id === "scallop") {
-    // bumps marching along each edge — the sticker-edge read from Frame 5
-    const inset = m * 0.055;
-    const pts: Pt[] = [];
-    const bump = m * 0.045;
-    for (const { p, n } of perimeter(w - inset * 2, h - inset * 2, m * 0.075)) {
-      const phase = (p.x + p.y) / (m * 0.075);
-      const k = Math.abs(Math.sin(phase * Math.PI)) * bump * (0.7 + r() * 0.6);
-      pts.push({ x: inset + p.x + n.x * k, y: inset + p.y + n.y * k });
+    // The source comps build this from overlapping rounded-corner rectangles:
+    // each edge reads as a run of big soft lobes. Drawn as outward arcs
+    // between perimeter stations — a cloud-edged rectangle.
+    const inset = m * 0.07;
+    const iw = w - inset * 2;
+    const ih = h - inset * 2;
+    const target = m * 0.24; // lobe width
+    const stations: Pt[] = [];
+    const edge = (a: Pt, b: Pt) => {
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const nSeg = Math.max(2, Math.round(len / target));
+      for (let i = 0; i < nSeg; i++) {
+        const t = i / nSeg;
+        stations.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      }
+    };
+    edge({ x: inset, y: inset }, { x: inset + iw, y: inset });
+    edge({ x: inset + iw, y: inset }, { x: inset + iw, y: inset + ih });
+    edge({ x: inset + iw, y: inset + ih }, { x: inset, y: inset + ih });
+    edge({ x: inset, y: inset + ih }, { x: inset, y: inset });
+    let d = `M ${stations[0].x.toFixed(1)} ${stations[0].y.toFixed(1)}`;
+    for (let i = 1; i <= stations.length; i++) {
+      const q = stations[i % stations.length];
+      const prev = stations[i - 1];
+      const seg = Math.hypot(q.x - prev.x, q.y - prev.y);
+      // radius a touch over half the chord → wide, shallow, round-cornered lobe
+      const rad = (seg / 2) * (1.04 + r() * 0.12);
+      d += ` A ${rad.toFixed(1)} ${rad.toFixed(1)} 0 0 1 ${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
     }
-    return { d: smoothPath(pts, { closed: true, tension: 0.9 }) };
+    return { d: d + " Z" };
   }
 
   if (id === "swoop") {
