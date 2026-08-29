@@ -195,6 +195,17 @@ function motifArt(doc: Doc, w: number, h: number): string {
   });
 }
 
+// Full-bleed photo texture under everything, veiled by the ground color so
+// ink stays readable by construction. bgFade is the veil's opacity.
+function bgTextureSvg(doc: Doc, W: number, H: number): string {
+  const src = photoById(doc.comp.bg)?.src;
+  if (!src) return "";
+  const g = docGround(doc);
+  return `<image href="${src}" x="0" y="0" width="${W}" height="${H}"
+      preserveAspectRatio="xMidYMid slice"/>
+    <rect width="${W}" height="${H}" fill="${g.hex}" fill-opacity="${doc.comp.bgFade.toFixed(2)}"/>`;
+}
+
 function composedSvg(doc: Doc, W: number, H: number): string {
   const t = docTemplate(doc);
   const c = t.comp!;
@@ -204,6 +215,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const comp = doc.comp;
   const title = (doc.fields.title ?? "").trim();
   const detail = (doc.fields.detail ?? "").trim();
+  const bg = bgTextureSvg(doc, W, H);
 
   // Bottom band: logotype/pill left, chips right — shared by every layout.
   const rowCy = H - m - c.logoH / 2;
@@ -232,12 +244,24 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   if (comp.layout === "hero" || comp.layout === "panel") {
     const win = frameWindow(doc, m * 0.7, heroTop, W - m * 1.4, heroBottom - heroTop,
       comp.layout === "panel" ? "fill" : "photo");
-    return win + text + bottom;
+    return bg + win + text + bottom;
   }
 
   if (comp.layout === "motif") {
     // full-bleed motif; the words sit right on it
-    return motifArt(doc, W, H) + text + bottom;
+    return bg + motifArt(doc, W, H) + text + bottom;
+  }
+
+  if (comp.layout === "collage") {
+    // everything at once: texture wash, motif running the full frame, and a
+    // framed photo floating on top of both
+    const pw = W * 0.68;
+    const ph = Math.min(heroBottom - m * 1.8, H * 0.52);
+    const px = (W - pw) / 2;
+    const py = m + (heroBottom - m - ph) * 0.42;
+    const photo = frameWindow(doc, px, py, pw, ph, "photo");
+    const tag = pillSvg(px + pw, py + ph + c.chipSize * 0.7, c.chipSize * 0.9, ink, g.hex, true);
+    return bg + motifArt(doc, W, H) + photo + tag + text + bottom;
   }
 
   // backdrop: motif pours across the top, the framed photo floats over it
@@ -250,7 +274,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const py = Math.max(m * 1.4, motifH - ph * 0.82);
   const photo = frameWindow(doc, px, py, pw, ph, "photo");
   const tag = pillSvg(px + pw, py + ph + c.chipSize * 0.7, c.chipSize * 0.9, ink, g.hex, true);
-  return motif + photo + tag + text + bottom;
+  return bg + motif + photo + tag + text + bottom;
 }
 
 // --- diagram kit -------------------------------------------------------------

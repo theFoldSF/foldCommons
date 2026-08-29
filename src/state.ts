@@ -30,13 +30,18 @@ export interface DiagramState {
 
 // The composed layouts (poster / story / post): what the frame holds and
 // where everything sits. All values are canon references + seeds.
-export type LayoutKey = "hero" | "panel" | "motif" | "backdrop";
+export type LayoutKey = "hero" | "panel" | "motif" | "backdrop" | "collage";
 export const LAYOUTS: { key: LayoutKey; label: string; blurb: string }[] = [
   { key: "hero", label: "Photo hero", blurb: "A framed photo carries it. Title below, date chips beside." },
   { key: "panel", label: "Color panel", blurb: "A canon color in an organic frame — the quiet one." },
   { key: "motif", label: "Motif", blurb: "A generative motif runs the whole frame." },
   { key: "backdrop", label: "Motif + photo", blurb: "The motif pours behind a framed photo." },
+  { key: "collage", label: "Collage", blurb: "Texture, motif, and a framed photo — everything at once." },
 ];
+
+// Background texture wash: how much ground color veils the photo. Clamped so
+// text can never sit on a bare photo.
+export const BG_FADE = { min: 0.5, max: 0.92, default: 0.78 };
 
 export interface CompState {
   layout: LayoutKey;
@@ -44,6 +49,8 @@ export interface CompState {
   frameSeed: number;
   photo: string; // photo library id; "" = none
   upload?: string; // member-uploaded image (data URI), wins over photo
+  bg: string; // photo id used as full-bleed background texture; "" = plain ground
+  bgFade: number; // ground-color wash over the texture (BG_FADE range)
   panelAccent: number; // panel fill / photo-less hero fill
   wm: "logo" | "pill"; // chunky FOLD logotype or "the Fold" pill
   chipAccents: [number, number]; // date chip, time chip
@@ -90,6 +97,8 @@ export function newDoc(templateId: string): Doc {
       frame: "wobble",
       frameSeed: 7,
       photo: "fold-6416",
+      bg: "",
+      bgFade: BG_FADE.default,
       panelAccent: 0,
       wm: "logo",
       chipAccents: [0, 2],
@@ -136,13 +145,22 @@ export function docAccent(doc: Doc, idx: number): string {
 // One tap → a genuinely different composition, still entirely inside canon.
 export function shuffleComp(doc: Doc) {
   const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+  // an upload is the member's deliberate choice — keep it; otherwise re-draw
+  // the framed photo from the house library
+  if (!doc.comp.upload && PHOTOS.length) doc.comp.photo = pick(PHOTOS).id;
   const hasPhoto = !!(doc.comp.upload || doc.comp.photo);
   const layouts: LayoutKey[] = hasPhoto
-    ? ["hero", "hero", "backdrop", "motif", "panel"]
+    ? ["hero", "hero", "backdrop", "collage", "motif", "panel"]
     : ["panel", "motif", "motif", "hero"];
   doc.comp.layout = pick(layouts);
   doc.comp.frame = pick(FRAMES).id;
   doc.comp.frameSeed = Math.floor(Math.random() * 100000);
+  // background texture: collage always gets one; other layouts sometimes
+  if (PHOTOS.length && (doc.comp.layout === "collage" || Math.random() < 0.35)) {
+    const framed = doc.comp.upload ? "" : doc.comp.photo;
+    doc.comp.bg = pick(PHOTOS.filter((p) => p.id !== framed).concat(PHOTOS.slice(0, 1))).id;
+    doc.comp.bgFade = BG_FADE.min + Math.random() * (BG_FADE.max - BG_FADE.min);
+  } else doc.comp.bg = "";
   doc.comp.panelAccent = Math.floor(Math.random() * 4);
   doc.comp.wm = pick(["logo", "logo", "pill"]);
   doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
@@ -178,6 +196,12 @@ export function sanitize(doc: Doc): Doc {
     delete doc.comp.upload;
   if (PHOTOS.length && doc.comp.photo && !PHOTOS.some((p) => p.id === doc.comp.photo))
     doc.comp.photo = "";
+  if (typeof doc.comp.bg !== "string") doc.comp.bg = "";
+  if (PHOTOS.length && doc.comp.bg && !PHOTOS.some((p) => p.id === doc.comp.bg))
+    doc.comp.bg = "";
+  doc.comp.bgFade = Number.isFinite(doc.comp.bgFade)
+    ? Math.min(BG_FADE.max, Math.max(BG_FADE.min, doc.comp.bgFade))
+    : BG_FADE.default;
   if (doc.comp.wm !== "logo" && doc.comp.wm !== "pill") doc.comp.wm = "logo";
   doc.comp.panelAccent = Number.isFinite(doc.comp.panelAccent) ? Math.round(doc.comp.panelAccent) : 0;
   const ca = doc.comp.chipAccents;

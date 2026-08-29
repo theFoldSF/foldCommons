@@ -22,6 +22,7 @@ import { PHOTOS, loadPhotos, readUpload } from "./photos/index";
 import { TEMPLATES } from "./templates/index";
 import { renderDoc } from "./render";
 import {
+  BG_FADE,
   LAYOUTS,
   decodeDoc,
   docGround,
@@ -251,51 +252,93 @@ function compControls(into: HTMLElement) {
 function photoControls(into: HTMLElement) {
   const t = docTemplate(doc);
   if (!t.composed) return;
-  if (doc.comp.layout === "panel" || doc.comp.layout === "motif") return;
-  into.appendChild(h(`<h3 class="panel-title">Photo</h3>`));
+  const framed = doc.comp.layout !== "panel" && doc.comp.layout !== "motif";
 
-  const grid = h(`<div class="photo-grid"></div>`);
-  for (const p of PHOTOS) {
-    const on = !doc.comp.upload && doc.comp.photo === p.id;
-    const cell = h(
-      `<button class="photo-cell ${on ? "active" : ""}" title="${p.name}">
-        <img src="${p.src}" alt="${p.name}"></button>`
-    );
-    cell.onclick = () => {
-      delete doc.comp.upload;
-      doc.comp.photo = p.id;
+  if (framed) {
+    into.appendChild(h(`<h3 class="panel-title">Photo</h3>`));
+    const grid = h(`<div class="photo-grid"></div>`);
+    for (const p of PHOTOS) {
+      const on = !doc.comp.upload && doc.comp.photo === p.id;
+      const cell = h(
+        `<button class="photo-cell ${on ? "active" : ""}" title="${p.name}">
+          <img src="${p.src}" alt="${p.name}"></button>`
+      );
+      cell.onclick = () => {
+        delete doc.comp.upload;
+        doc.comp.photo = p.id;
+        buildRight();
+        renderCanvas();
+      };
+      grid.appendChild(cell);
+    }
+    into.appendChild(grid);
+
+    const row = h(`<div class="row" style="margin:8px 0 14px"></div>`);
+    const up = h(`<button class="mini" style="flex:1">⤒ Upload photo${doc.comp.upload ? " ✓" : ""}</button>`);
+    const file = h(`<input type="file" accept="image/*" style="display:none">`) as HTMLInputElement;
+    up.onclick = () => file.click();
+    file.onchange = async () => {
+      if (!file.files?.[0]) return;
+      const p = await readUpload(file.files[0]);
+      doc.comp.upload = p.src;
       buildRight();
       renderCanvas();
     };
-    grid.appendChild(cell);
+    const none = h(`<button class="mini">No photo</button>`);
+    none.onclick = () => {
+      delete doc.comp.upload;
+      doc.comp.photo = "";
+      buildRight();
+      renderCanvas();
+    };
+    row.append(up, file, none);
+    into.appendChild(row);
+    into.appendChild(
+      h(`<div class="note">House photos are shot inside the Fold itself — its windows,
+        brick, and concrete. Uploads stay in this doc. Either way the frame and
+        palette keep it ours.</div>`)
+    );
   }
-  into.appendChild(grid);
 
-  const row = h(`<div class="row" style="margin:8px 0 14px"></div>`);
-  const up = h(`<button class="mini" style="flex:1">⤒ Upload photo${doc.comp.upload ? " ✓" : ""}</button>`);
-  const file = h(`<input type="file" accept="image/*" style="display:none">`) as HTMLInputElement;
-  up.onclick = () => file.click();
-  file.onchange = async () => {
-    if (!file.files?.[0]) return;
-    const p = await readUpload(file.files[0]);
-    doc.comp.upload = p.src;
-    buildRight();
-    renderCanvas();
-  };
-  const none = h(`<button class="mini">No photo</button>`);
-  none.onclick = () => {
-    delete doc.comp.upload;
-    doc.comp.photo = "";
-    buildRight();
-    renderCanvas();
-  };
-  row.append(up, file, none);
-  into.appendChild(row);
-  into.appendChild(
-    h(`<div class="note">House photos are shot inside the Fold itself — its windows,
-      brick, and concrete. Uploads stay in this doc. Either way the frame and
-      palette keep it ours.</div>`)
+  // Background texture — any house photo can wash the whole ground.
+  into.appendChild(h(`<h3 class="panel-title">Background texture</h3>`));
+  const bgGrid = h(`<div class="photo-grid"></div>`);
+  const noneCell = h(
+    `<button class="photo-cell bg-none ${doc.comp.bg === "" ? "active" : ""}" title="None">✕</button>`
   );
+  noneCell.onclick = () => {
+    doc.comp.bg = "";
+    buildRight();
+    renderCanvas();
+  };
+  bgGrid.appendChild(noneCell);
+  for (const p of PHOTOS) {
+    const cell = h(
+      `<button class="photo-cell ${doc.comp.bg === p.id ? "active" : ""}" title="${p.name}">
+        <img src="${p.src}" alt="${p.name}"></button>`
+    );
+    cell.onclick = () => {
+      doc.comp.bg = p.id;
+      buildRight();
+      renderCanvas();
+    };
+    bgGrid.appendChild(cell);
+  }
+  into.appendChild(bgGrid);
+  if (doc.comp.bg) {
+    const f = h(`<div class="field" style="margin-top:8px"><label>Texture strength</label></div>`);
+    // slider runs texture-strength-wise; the doc stores the ground veil (its inverse)
+    const r = h(
+      `<input type="range" min="${BG_FADE.min}" max="${BG_FADE.max}" step="0.01"
+        value="${BG_FADE.max + BG_FADE.min - doc.comp.bgFade}">`
+    ) as HTMLInputElement;
+    r.oninput = () => {
+      doc.comp.bgFade = BG_FADE.max + BG_FADE.min - Number(r.value);
+      renderCanvas();
+    };
+    f.appendChild(r);
+    into.appendChild(f);
+  }
 }
 
 function composedWordControls(into: HTMLElement) {
@@ -364,7 +407,8 @@ function fieldControls(into: HTMLElement) {
 function motifControls(into: HTMLElement) {
   const t = docTemplate(doc);
   const composedMotif =
-    t.composed && (doc.comp.layout === "motif" || doc.comp.layout === "backdrop");
+    t.composed &&
+    (doc.comp.layout === "motif" || doc.comp.layout === "backdrop" || doc.comp.layout === "collage");
   if ((!t.motifSlot && !composedMotif) || !doc.motif) return;
   into.appendChild(h(`<h3 class="panel-title">Motif</h3>`));
   const sel = h(
