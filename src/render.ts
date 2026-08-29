@@ -4,10 +4,11 @@
 import { TYPE_RULES, isDark, type TypeRole } from "./brand/tokens";
 import { fontFamilyCss } from "./brand/fonts";
 import { SIGNATURE_ENGINE, engineById } from "./engines/index";
+import { netExtent } from "./engines/foldNetwork.js";
 import { framePath, ticketPath, scallopChipPath, scallopChipProtrusion } from "./frames/index";
 import { rng, smoothPath } from "./engines/util.js";
 import { markById } from "./marks/index";
-import { photoById } from "./photos/index";
+import { photoById, photoRegionLum } from "./photos/index";
 import { ARRANGEMENTS, docAccent, docGround, docSeason, docTemplate, type ChipStyle, type Doc, type XfKey } from "./state";
 import type { TextZone } from "./templates/index";
 
@@ -102,11 +103,10 @@ const bodyFace = () => TYPE_RULES.byRole("body")[0];
 // The engine renders in a small corner box; size/weight are scaled up so the
 // mark reads at logotype scale, and tiles is pinned to 1 — one mark, always.
 function signatureSvg(doc: Doc, x: number, y: number, w: number, h: number, ink: string): string {
-  const sp = doc.comp.sig.params;
   const inner = SIGNATURE_ENGINE.render({
     w,
     h,
-    p: { ...sp, tiles: 1, size: (sp.size ?? 1) * 2.2, weight: (sp.weight ?? 1) * 3 },
+    p: sigEngineParams(doc),
     colors: [],
     ink,
     ground: "none",
@@ -463,6 +463,74 @@ function arrangeBoxes(
   return { motif, photo };
 }
 
+function hexLum(hex: string): number {
+  const n = parseInt(hex.replace("#", ""), 16);
+  return (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+}
+
+// The photo/panel window each layout places — the same geometry the layout
+// branches use, exposed so the words can ask what actually sits under them.
+function layoutWindow(
+  doc: Doc,
+  W: number,
+  heroBottom: number
+): { x: number; y: number; w: number; h: number; kind: "photo" | "fill" } | null {
+  const c = docTemplate(doc).comp!;
+  const m = c.margin;
+  const comp = doc.comp;
+  if (comp.layout === "hero" || comp.layout === "panel")
+    return { x: m * 0.7, y: m, w: W - m * 1.4, h: heroBottom - m, kind: comp.layout === "panel" ? "fill" : "photo" };
+  if (comp.layout === "motif") return null;
+  const mp = m * 0.45;
+  const { photo } = arrangeBoxes(comp.arrange, comp.frameSeed, mp, mp, W - mp, heroBottom - mp);
+  return { ...photo, kind: "photo" };
+}
+
+// Contrast guardrail for marks that sit directly on the art (the net
+// signature, the bare-text "line" chips): estimate the luminance under the
+// element's box — ground, then the veiled background texture, then any
+// photo/panel window covering it — and pick near-white or near-ink. Members
+// never choose this; it just keeps the mark legible by construction.
+function contrastInkAt(
+  doc: Doc,
+  box: { x: number; y: number; w: number; h: number },
+  W: number,
+  H: number,
+  heroBottom: number
+): string {
+  const g = docGround(doc);
+  let L = hexLum(g.hex);
+  const bgPhoto = photoById(doc.comp.bg);
+  if (bgPhoto) {
+    const pl = photoRegionLum(bgPhoto, box, { x: 0, y: 0, w: W, h: H });
+    L = pl * (1 - doc.comp.bgFade) + L * doc.comp.bgFade;
+  }
+  const win = layoutWindow(doc, W, heroBottom);
+  if (win) {
+    const ox = Math.max(0, Math.min(box.x + box.w, win.x + win.w) - Math.max(box.x, win.x));
+    const oy = Math.max(0, Math.min(box.y + box.h, win.y + win.h) - Math.max(box.y, win.y));
+    const frac = Math.min(1, (ox * oy) / Math.max(1, box.w * box.h));
+    if (frac > 0) {
+      let winL = 0.5; // unknown upload pixels — a safe mid guess
+      if (win.kind === "fill") winL = hexLum(docAccent(doc, doc.comp.panelAccent));
+      else if (!doc.comp.upload) {
+        const p = photoById(doc.comp.photo);
+        if (p) winL = photoRegionLum(p, box, win);
+      }
+      // area-weighted: a box straddling the window edge sees both surfaces
+      L = winL * frac + L * (1 - frac);
+    }
+  }
+  return L < 0.5 ? "#FFF9F1" : "#03071B";
+}
+
+// The effective engine params the signature renders with — shared with
+// netExtent so balance math sees exactly the mark that gets drawn.
+function sigEngineParams(doc: Doc): Record<string, number> {
+  const sp = doc.comp.sig.params;
+  return { ...sp, tiles: 1, size: (sp.size ?? 1) * 2.2, weight: (sp.weight ?? 1) * 3 };
+}
+
 function composedSvg(doc: Doc, W: number, H: number): string {
   const t = docTemplate(doc);
   const c = t.comp!;
@@ -488,11 +556,19 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   let proseDefault: { x: number; y: number; w: number };
 
   if (comp.words === "corners") {
-    const sigX = m * 0.6, sigY = m * 0.6;
-    wordsSvg += xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, ink));
+    const hb = H - m * 0.35;
+    // fully inside the art window, not straddling its edge — a straddled mark
+    // can't win the contrast fight on both surfaces at once
+    const sigX = m * 1.1, sigY = m * 1.2;
+    const sigInk = contrastInkAt(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
+    wordsSvg += xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, sigInk));
     const chipH = c.chipSize * 1.75;
     const chipCy = H - m * 0.8 - chipH / 2;
-    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, chipCy, c.chipSize, comp.frameSeed + 1, ink, "end");
+    const rowInk =
+      chipStyle === "line"
+        ? contrastInkAt(doc, { x: W - m - c.chipSize * 12, y: chipCy - chipH / 2, w: c.chipSize * 12, h: chipH }, W, H, hb)
+        : ink;
+    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
     wordsSvg += row.svg;
     if (title) {
       const size0 = c.titleSize * 1.3;
@@ -515,11 +591,17 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     heroBottom = H - m * 0.35;
     proseDefault = { x: (W - W * 0.6) / 2, y: 0, w: W * 0.6 };
   } else if (comp.words === "stack") {
-    const sigX = m * 0.6, sigY = m * 0.6;
-    wordsSvg += xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, ink));
+    const hb = H - m * 0.35;
+    const sigX = m * 1.1, sigY = m * 1.2;
+    const sigInk = contrastInkAt(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
+    wordsSvg += xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, sigInk));
     const chipH = c.chipSize * 1.75;
     const chipCy = H - m * 0.55 - chipH / 2;
-    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, m * 0.6, chipCy, c.chipSize, comp.frameSeed + 1, ink, "start");
+    const rowInk =
+      chipStyle === "line"
+        ? contrastInkAt(doc, { x: m * 0.6, y: chipCy - chipH / 2, w: c.chipSize * 12, h: chipH }, W, H, hb)
+        : ink;
+    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, m * 0.6, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "start");
     wordsSvg += row.svg;
     if (title) {
       const size0 = c.titleSize * 1.4;
@@ -545,23 +627,32 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const bandH = Math.max(sigH, c.titleSize * 1.1);
     const rowCy = H - m * 0.8 - bandH / 2;
     const bandTop = rowCy - bandH / 2;
+    const hb = H - m * 0.8 - bandH - m * 0.45;
     const sigX = m * 0.55, sigY = rowCy - sigH / 2;
-    wordsSvg += xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, ink));
-    const row0 = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, ink, "end");
+    const sigInk = contrastInkAt(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
+    wordsSvg += xfWrap(doc, "sig", sigX + sigW / 2, sigY + sigH / 2, signatureSvg(doc, sigX, sigY, sigW, sigH, sigInk));
+    const rowInk =
+      chipStyle === "line"
+        ? contrastInkAt(doc, { x: W - m - c.chipSize * 12, y: rowCy - sigH / 2, w: c.chipSize * 12, h: sigH }, W, H, hb)
+        : ink;
+    const row0 = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
     let rowOut = row0;
     let titleOut = "";
     if (title) {
       const titleBoundary = row0.hasAny ? row0.farEdge - c.chipSize * 0.8 : row0.farEdge;
-      const titleX = m * 0.55 + sigW + c.titleSize * 0.5;
+      // balance against the mark's actual ink extent, not its box — a narrow
+      // two-row net leaves the box half-empty and would skew the title right
+      const ext = netExtent({ w: sigW, h: sigH, p: sigEngineParams(doc), seed: comp.sig.seed });
+      const titleX = sigX + ext.x1 + c.titleSize * 0.5;
       const maxW = Math.max(60, titleBoundary - titleX);
       const { size } = fitTitle(title, c.titleSize, maxW);
-      // the title sits evenly between the signature and the chips
+      // the title sits evenly between the signature's ink and the chips
       const cxT = (titleX + titleBoundary) / 2;
       const baseline = rowCy + size * 0.34;
       titleOut = xfWrap(doc, "title", cxT, rowCy, titleTextSvg(title, cxT, baseline, "middle", size, ink));
       // squiggle chips share the title's baseline; their pills hang below it
       if (chipStyle === "line" && row0.hasAny)
-        rowOut = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, baseline + c.chipSize * 0.35, c.chipSize, comp.frameSeed + 1, ink, "end");
+        rowOut = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, baseline + c.chipSize * 0.35, c.chipSize, comp.frameSeed + 1, rowInk, "end");
     }
     wordsSvg += rowOut.svg + titleOut;
     heroBottom = H - m * 0.8 - bandH - m * 0.45;

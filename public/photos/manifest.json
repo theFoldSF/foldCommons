@@ -1,23 +1,107 @@
 [
-  { "id": "fold-6416", "name": "Ivy window · brick", "file": "fold-6416.jpg" },
-  { "id": "fold-6417", "name": "Sill with speaker", "file": "fold-6417.jpg" },
-  { "id": "fold-6418", "name": "Vines at the glass", "file": "fold-6418.jpg" },
-  { "id": "fold-6422", "name": "Orchid sill", "file": "fold-6422.jpg" },
-  { "id": "fold-6424", "name": "Window lattice", "file": "fold-6424.jpg" },
-  { "id": "fold-6431", "name": "Brick corner light", "file": "fold-6431.jpg" },
-  { "id": "fold-6415", "name": "Dried bouquet", "file": "fold-6415.jpg" },
-  { "id": "fold-6434", "name": "Leaf on red steel", "file": "fold-6434.jpg" },
-  { "id": "fold-6436", "name": "Concrete still life", "file": "fold-6436.jpg" },
-  { "id": "fold-6437", "name": "Frame corner", "file": "fold-6437.jpg" },
-  { "id": "fold-6439", "name": "Antique mirror", "file": "fold-6439.jpg" },
-  { "id": "fold-6440", "name": "Concrete curve", "file": "fold-6440.jpg" },
-  { "id": "fold-6443", "name": "Plaster relief", "file": "fold-6443.jpg" },
-  { "id": "fold-6445", "name": "Patched seam", "file": "fold-6445.jpg" },
-  { "id": "fold-6446", "name": "Drawn arrow", "file": "fold-6446.jpg" },
-  { "id": "fold-6452", "name": "Wood on rug", "file": "fold-6452.jpg" },
-  { "id": "fold-6457", "name": "Painted beam", "file": "fold-6457.jpg" },
-  { "id": "fold-6462", "name": "Waffle weave", "file": "fold-6462.jpg" },
-  { "id": "fold-6469", "name": "Candles", "file": "fold-6469.jpg" },
-  { "id": "fold-6472", "name": "Streaked concrete", "file": "fold-6472.jpg" },
-  { "id": "fold-6474", "name": "Lamp on the X", "file": "fold-6474.jpg" }
+  {
+    "id": "fold-6416",
+    "name": "Ivy window \u00b7 brick",
+    "file": "fold-6416.jpg"
+  },
+  {
+    "id": "fold-6417",
+    "name": "Sill with speaker",
+    "file": "fold-6417.jpg"
+  },
+  {
+    "id": "fold-6418",
+    "name": "Vines at the glass",
+    "file": "fold-6418.jpg"
+  },
+  {
+    "id": "fold-6422",
+    "name": "Orchid sill",
+    "file": "fold-6422.jpg"
+  },
+  {
+    "id": "fold-6424",
+    "name": "Window lattice",
+    "file": "fold-6424.jpg"
+  },
+  {
+    "id": "fold-6431",
+    "name": "Brick corner light",
+    "file": "fold-6431.jpg"
+  },
+  {
+    "id": "fold-6415",
+    "name": "Dried bouquet",
+    "file": "fold-6415.jpg"
+  },
+  {
+    "id": "fold-6434",
+    "name": "Leaf on red steel",
+    "file": "fold-6434.jpg"
+  },
+  {
+    "id": "fold-6436",
+    "name": "Concrete still life",
+    "file": "fold-6436.jpg"
+  },
+  {
+    "id": "fold-6437",
+    "name": "Frame corner",
+    "file": "fold-6437.jpg"
+  },
+  {
+    "id": "fold-6439",
+    "name": "Antique mirror",
+    "file": "fold-6439.jpg"
+  },
+  {
+    "id": "fold-6440",
+    "name": "Concrete curve",
+    "file": "fold-6440.jpg"
+  },
+  {
+    "id": "fold-6443",
+    "name": "Plaster relief",
+    "file": "fold-6443.jpg"
+  },
+  {
+    "id": "fold-6445",
+    "name": "Patched seam",
+    "file": "fold-6445.jpg"
+  },
+  {
+    "id": "fold-6446",
+    "name": "Drawn arrow",
+    "file": "fold-6446.jpg"
+  },
+  {
+    "id": "fold-6452",
+    "name": "Wood on rug",
+    "file": "fold-6452.jpg"
+  },
+  {
+    "id": "fold-6457",
+    "name": "Painted beam",
+    "file": "fold-6457.jpg"
+  },
+  {
+    "id": "fold-6462",
+    "name": "Waffle weave",
+    "file": "fold-6462.jpg"
+  },
+  {
+    "id": "fold-6469",
+    "name": "Candles",
+    "file": "fold-6469.jpg"
+  },
+  {
+    "id": "fold-6472",
+    "name": "Streaked concrete",
+    "file": "fold-6472.jpg"
+  },
+  {
+    "id": "fold-6474",
+    "name": "Lamp on the X",
+    "file": "fold-6474.jpg"
+  }
 ]

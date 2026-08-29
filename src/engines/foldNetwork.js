@@ -37,12 +37,14 @@ export default {
   },
 };
 
-function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
+// Everything seeded about a tile's letter placement, shared by the renderer
+// and by netExtent below — both must consume the rng in the identical order,
+// so the layout lives in one function and drawing continues with the same r.
+function layoutTile({ x0, y0, tw, th, p, seed, styleOverride }) {
   const r = rng((seed >>> 0) * 2246822519 + 1);
   const style = styleOverride === 3 ? Math.floor(r() * 3) : styleOverride;
   const S = Math.min(tw, th);
   const fs = S * 0.11 * p.size;
-  const lw = p.weight * S / 700;
 
   // The letters always read F→O→L→D — but loosely, like the sketch page:
   // each letter random-walks up or down while its x-advance is derived from
@@ -114,7 +116,43 @@ function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
     q.y = cy + (q.y - (mny + mxy) / 2) * fitK;
     q.fs *= fitK;
   }
+  return { r, style, S, fs, pts };
+}
 
+// "the" placement off the cluster's top-left — shared by drawing and extent.
+function thePos(pts, x0, y0) {
+  let bx0 = 1e9, by0 = 1e9, avgFs = 0;
+  for (const q of pts) {
+    bx0 = Math.min(bx0, q.x - q.fs * 0.6);
+    by0 = Math.min(by0, q.y - q.fs * 0.6);
+    avgFs += q.fs;
+  }
+  avgFs /= pts.length;
+  const theFs = avgFs * 0.38;
+  const tx = Math.max(x0 + theFs * 2, bx0 - theFs * 0.15);
+  const ty = Math.max(y0 + theFs * 0.6, by0 + theFs * 0.1);
+  return { tx, ty, theFs };
+}
+
+// The mark's actual horizontal ink extent inside a w×h box (tiles=1) — the
+// cluster fit-scales and drifts, so its visual edges usually sit well inside
+// the box. Layout code (the one-line band) balances the title against THIS,
+// not the box, so a narrow two-row mark can't skew the composition.
+export function netExtent({ w, h, p, seed }) {
+  const { pts } = layoutTile({ x0: 0, y0: 0, tw: w, th: h, p, seed, styleOverride: Math.round(p.style ?? 3) });
+  let ex0 = 1e9, ex1 = -1e9;
+  for (const q of pts) {
+    ex0 = Math.min(ex0, q.x - q.fs * 0.6);
+    ex1 = Math.max(ex1, q.x + q.fs * 0.6);
+  }
+  const t = thePos(pts, 0, 0);
+  ex0 = Math.min(ex0, t.tx - t.theFs * 1.9); // "the" is end-anchored at tx
+  return { x0: Math.max(0, ex0), x1: Math.min(w, ex1) };
+}
+
+function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
+  const { r, style, S, pts } = layoutTile({ x0, y0, tw, th, p, seed, styleOverride });
+  const lw = p.weight * S / 700;
   let out = "";
   if (style === 0) out += membrane(pts, r, S, ink, lw);
   else if (style === 1) out += web(pts, r, ink, lw);
@@ -127,18 +165,8 @@ function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
   // TM symbol mirrored to the top-left corner. Added last, after the letters
   // are placed and fit-scaled, so it never enters the collision/fit math and
   // can slightly overhang the cluster — but it's clamped to stay in the tile.
-  let bx0 = 1e9, by0 = 1e9;
-  let avgFs = 0;
-  for (const q of pts) {
-    bx0 = Math.min(bx0, q.x - q.fs * 0.6);
-    by0 = Math.min(by0, q.y - q.fs * 0.6);
-    avgFs += q.fs;
-  }
-  avgFs /= pts.length;
-  const theFs = avgFs * 0.38;
-  const tx = Math.max(x0 + theFs * 2, bx0 - theFs * 0.15);
-  const ty = Math.max(y0 + theFs * 0.6, by0 + theFs * 0.1);
-  out += `<text x="${round(tx)}" y="${round(ty)}" text-anchor="end" dominant-baseline="middle" font-family="'Fira Code', ui-monospace, monospace" font-weight="500" font-size="${round(theFs)}" fill="${ink}" fill-opacity="0.85">the</text>`;
+  const t = thePos(pts, x0, y0);
+  out += `<text x="${round(t.tx)}" y="${round(t.ty)}" text-anchor="end" dominant-baseline="middle" font-family="'Fira Code', ui-monospace, monospace" font-weight="500" font-size="${round(t.theFs)}" fill="${ink}" fill-opacity="0.85">the</text>`;
 
   return out;
 }
