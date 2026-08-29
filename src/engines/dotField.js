@@ -69,18 +69,24 @@ export default {
       const cx = w * (0.18 + r() * 0.64);
       const cy = h * (0.18 + r() * 0.64);
       const R = Math.min(w, h) * (big ? 0.22 + r() * 0.16 : 0.07 + r() * 0.06);
-      const n = big ? 9 + Math.floor(r() * 4) : 6;
+      // smooth wander: the radius is a sum of two low harmonics instead of
+      // independent per-vertex noise, so the contour flows instead of jagging
+      const a1 = (0.08 + 0.3 * p.wobble) * (0.5 + r() * 0.5);
+      const a2 = (0.05 + 0.22 * p.wobble) * (0.5 + r() * 0.5);
+      const f1 = 2, f2 = 3 + Math.floor(r() * 2);
+      const ph1 = r() * TAU, ph2 = r() * TAU;
+      const n = 30;
       const pts = [];
       for (let i = 0; i < n; i++) {
-        const a = (i / n) * TAU + r() * 0.3;
-        const rad = R * (1 + (r() - 0.5) * 2 * (0.25 + p.wobble * 0.55));
+        const a = (i / n) * TAU;
+        const rad = R * (1 + a1 * Math.sin(f1 * a + ph1) + a2 * Math.sin(f2 * a + ph2));
         pts.push({
-          x: clamp(cx + Math.cos(a) * rad * (1 + p.wobble * (r() - 0.5)), -w * 0.05, w * 1.05),
-          y: clamp(cy + Math.sin(a) * rad, -h * 0.05, h * 1.05),
+          x: clamp(cx + Math.cos(a) * rad, w * 0.02, w * 0.98),
+          y: clamp(cy + Math.sin(a) * rad, h * 0.02, h * 0.98),
         });
       }
       blobCenters.push([cx, cy, R]);
-      out += `<path d="${smoothPath(pts, { closed: true, tension: 0.9 })}" fill="none" stroke="${accent}" stroke-width="${1.4 * U}" stroke-dasharray="${4.5 * U} ${2.6 * U}" stroke-linecap="round"/>`;
+      out += `<path d="${smoothPath(pts, { closed: true, tension: 0.7 })}" fill="none" stroke="${accent}" stroke-width="${1.4 * U}" stroke-dasharray="${4.5 * U} ${2.6 * U}" stroke-linecap="round"/>`;
     }
 
     // --- datum points ◉ — biased toward the contours they annotate.

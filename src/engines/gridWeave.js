@@ -13,11 +13,11 @@ export default {
     "A hand-ruled lattice with a meandering thread knotted around it — over, under, around — the fold as a weave.",
   params: [
     { key: "cells", label: "Grid cells", min: 3, max: 8, step: 1, default: 4 },
-    { key: "lobes", label: "Meander lobes", min: 4, max: 10, step: 1, default: 6 },
-    { key: "amp", label: "Meander swing", min: 0.1, max: 0.55, step: 0.01, default: 0.3 },
+    { key: "lobes", label: "Meander lobes", min: 3, max: 6, step: 1, default: 5 },
+    { key: "amp", label: "Meander swing", min: 0.05, max: 0.24, step: 0.01, default: 0.16 },
     { key: "strands", label: "Strands", min: 1, max: 3, step: 1, default: 2 },
     { key: "hand", label: "Hand-drawn", min: 0, max: 1, step: 0.01, default: 0.5 },
-    { key: "weight", label: "Thread weight", min: 1, max: 5, step: 0.05, default: 2.4 },
+    { key: "weight", label: "Thread weight", min: 1, max: 2.6, step: 0.05, default: 1.8 },
     { key: "cuts", label: "Under-passes", min: 0, max: 1, step: 1, default: 0 },
   ],
 

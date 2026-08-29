@@ -14,8 +14,8 @@ export default {
   params: [
     { key: "nodes",   label: "Nodes",      min: 4,  max: 40, step: 1,    default: 16 },
     { key: "density", label: "Density",    min: 0,  max: 1,  step: 0.01, default: 0.35 },
-    { key: "spread",  label: "Spread",     min: 0.3, max: 1.3, step: 0.01, default: 1 },
-    { key: "scale",   label: "Node size",  min: 0.6, max: 3,  step: 0.05, default: 1.6 },
+    { key: "spread",  label: "Spread",     min: 0.3, max: 1.05, step: 0.01, default: 0.75 },
+    { key: "scale",   label: "Node size",  min: 0.4, max: 1.1, step: 0.05, default: 0.8 },
     { key: "curve",   label: "Edge curve", min: 0,  max: 1,  step: 0.01, default: 0.5 },
     { key: "field",   label: "Lattice field", min: 0, max: 1, step: 0.01, default: 0 },
   ],
@@ -24,8 +24,11 @@ export default {
     const r = rng(seed);
     const n = Math.round(p.nodes);
     const cx = w / 2, cy = h / 2;
-    const rad = Math.min(w, h) * 0.42 * p.spread;
-    const U = (Math.min(w, h) / 700) * (p.scale ?? 1.6);   // marks scale with the canvas
+    // elliptical spread: at full stretch the gathering spans the whole
+    // composition, tall canvases included — not just a min-dimension disc
+    const rx = w * 0.46 * p.spread;
+    const ry = h * 0.46 * p.spread;
+    const U = (Math.min(w, h) / 700) * (p.scale ?? 0.8);   // marks scale with the canvas
     const pal = colors.length ? colors : [ink];
 
     let out = "";
@@ -54,8 +57,15 @@ export default {
     const nodes = [];
     for (let i = 0; i < n; i++) {
       const ang = r() * Math.PI * 2;
-      const rr = Math.sqrt(r()) * rad * (0.4 + 0.6 * r());
-      nodes.push({ x: cx + Math.cos(ang) * rr, y: cy + Math.sin(ang) * rr, c: pal[i % pal.length], size: (4 + r() * 7) * U });
+      const rr = Math.sqrt(r()) * (0.4 + 0.6 * r());
+      const size = (4 + r() * 7) * U;
+      const margin = size + 4 * U;
+      nodes.push({
+        x: Math.min(w - margin, Math.max(margin, cx + Math.cos(ang) * rr * rx)),
+        y: Math.min(h - margin, Math.max(margin, cy + Math.sin(ang) * rr * ry)),
+        c: pal[i % pal.length],
+        size,
+      });
     }
 
     // Connect by nearest-neighbour + a density-controlled sprinkle of long ties.

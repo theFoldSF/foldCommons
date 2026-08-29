@@ -12,7 +12,8 @@ export default {
   blurb: "Strands hung on a line and let drape through a flow field — the clothesline, abstracted, in the Cloth engine's ink-and-palette register.",
   params: [
     { key: "strands", label: "Strands",   min: 4,  max: 60, step: 1,    default: 26 },
-    { key: "length",  label: "Length",    min: 0.2, max: 1, step: 0.01, default: 0.6 },
+    // 1.0 ≈ the old maximum drape; the top of the range reaches the page foot
+    { key: "length",  label: "Length",    min: 1, max: 1.5, step: 0.01, default: 1.15 },
     { key: "curl",    label: "Curl",      min: 0,  max: 1,  step: 0.01, default: 0.45 },
     { key: "line",    label: "Hang line", min: 0.1, max: 0.6, step: 0.01, default: 0.28 },
     { key: "marks",   label: "Diagram marks", min: 0, max: 1, step: 0.01, default: 0.45 },
@@ -31,7 +32,7 @@ export default {
     const strands = [];
     for (let i = 0; i < n; i++) {
       const x0 = w * 0.06 + (i / (n - 1)) * w * 0.88 + (r() - 0.5) * 6;
-      const len = maxLen * (0.5 + 0.5 * r());
+      const len = maxLen * (0.6 + 0.4 * r());
       const pts = [{ x: x0, y: baseY }];
       let x = x0, y = baseY;
       for (let s = 0; s < len; s += step) {

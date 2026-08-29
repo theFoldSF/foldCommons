@@ -1,0 +1,7 @@
+[
+  { "id": "pinwheel", "name": "Pinwheel stack", "file": "pinwheel.png", "w": 900, "h": 850 },
+  { "id": "arch", "name": "Arch I", "file": "arch.png", "w": 700, "h": 900 },
+  { "id": "arch2", "name": "Arch II", "file": "arch2.png", "w": 700, "h": 900 },
+  { "id": "letter-fa", "name": "F form I", "file": "lettersa.png", "w": 554, "h": 900 },
+  { "id": "letter-fb", "name": "F form II", "file": "lettersb.png", "w": 571, "h": 900 }
+]

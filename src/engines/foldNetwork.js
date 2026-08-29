@@ -44,38 +44,71 @@ function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
   const fs = S * 0.11 * p.size;
   const lw = p.weight * S / 700;
 
-  // The letters always read F→O→L→D: usually one line, sometimes FO over LD.
-  // Spacing is built from the letters' own sizes, so they can never overlap —
-  // scatter only loosens the gaps and the vertical drift.
+  // The letters always read F→O→L→D — but loosely, like the sketch page:
+  // each letter random-walks up or down while its x-advance is derived from
+  // the pair's sizes and that vertical drop, so a letter can tuck diagonally
+  // under its neighbour (the way O drops below F–L–D on the boards) without
+  // ever touching it. A relaxation pass then guarantees clearance between
+  // non-adjacent letters too, and the whole cluster is fit-scaled to the tile.
   const sc = p.scatter;
-  const fss = LETTERS.map(() => fs * (0.8 + r() * 0.55));
+  const fss = LETTERS.map(() => fs * (0.72 + r() * 0.7));
   const rows =
-    r() < 0.28 && th > fs * 3.4 ? [[0, 1], [2, 3]] : [[0, 1, 2, 3]];
+    r() < 0.25 && th > fs * 3.4 ? [[0, 1], [2, 3]] : [[0, 1, 2, 3]];
   const pts = [];
-  const rowGap = Math.max(...fss) * 1.5 + fs * 0.5 * sc;
+  const rowGap = Math.max(...fss) * 1.6 + fs * 0.6 * sc;
+  const minDist = (a, b) => (a + b) * 0.58;
   rows.forEach((row, ri) => {
-    // advance x by the half-widths of neighbouring letters plus a seeded gap
-    const xs = [0];
-    for (let k = 1; k < row.length; k++)
-      xs.push(xs[k - 1] + (fss[row[k - 1]] + fss[row[k]]) * 0.42 + fs * (0.25 + r() * 1.1 * sc));
-    const total = xs[xs.length - 1];
-    const fit = Math.min(1, (tw * 0.82) / Math.max(1, total));
-    const rowCx = x0 + tw / 2 + (rows.length > 1 ? (r() - 0.5) * tw * 0.14 * sc : 0);
-    const rowCy =
-      rows.length === 1
-        ? y0 + th * (0.5 + (r() - 0.5) * 0.22 * sc)
-        : y0 + th / 2 + (ri === 0 ? -rowGap / 2 : rowGap / 2);
+    let x = 0;
+    let y = (rows.length > 1 ? (ri === 0 ? -rowGap / 2 : rowGap / 2) : 0);
     row.forEach((li, k) => {
-      // vertical drift stays under half the row gap — rows can't collide
-      const drift = (r() - 0.5) * Math.min(fs * 0.9 * sc, rowGap * 0.4);
-      pts.push({
-        x: rowCx - (total * fit) / 2 + xs[k] * fit,
-        y: rowCy + drift,
-        ch: LETTERS[li],
-        fs: fss[li],
-      });
+      if (k > 0) {
+        const prev = row[k - 1];
+        const dy = (r() - 0.5) * fs * 2.6 * sc;
+        const D = minDist(fss[prev], fss[li]) + fs * (0.1 + r() * 0.9 * sc);
+        // the diagonal drop buys back horizontal room, but x always advances
+        const dx = Math.max(Math.sqrt(Math.max(0, D * D - dy * dy)), (fss[prev] + fss[li]) * 0.3);
+        x += dx;
+        y += dy;
+      }
+      pts.push({ x, y, ch: LETTERS[li], fs: fss[li] });
     });
   });
+  // clearance for NON-adjacent pairs: small symmetric pushes apart — too
+  // small to reorder the reading direction, enough to never collide
+  for (let it = 0; it < 24; it++) {
+    let moved = false;
+    for (let i = 0; i < pts.length; i++)
+      for (let j = i + 1; j < pts.length; j++) {
+        const need = minDist(pts[i].fs, pts[j].fs);
+        let dx = pts[j].x - pts[i].x, dy = pts[j].y - pts[i].y;
+        const d = Math.hypot(dx, dy);
+        if (d >= need) continue;
+        if (d < 1e-6) { dx = 1; dy = 0; }
+        const push = (need - Math.max(d, 1e-6)) / 2;
+        const ux = dx / Math.max(d, 1e-6), uy = dy / Math.max(d, 1e-6);
+        pts[i].x -= ux * push; pts[i].y -= uy * push;
+        pts[j].x += ux * push; pts[j].y += uy * push;
+        moved = true;
+      }
+    if (!moved) break;
+  }
+  // fit the cluster (letter extents included) into the tile, centered with a
+  // seeded nudge
+  let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+  for (const q of pts) {
+    mnx = Math.min(mnx, q.x - q.fs * 0.6);
+    mxx = Math.max(mxx, q.x + q.fs * 0.6);
+    mny = Math.min(mny, q.y - q.fs * 0.6);
+    mxy = Math.max(mxy, q.y + q.fs * 0.6);
+  }
+  const fitK = Math.min(1, (tw * 0.86) / Math.max(1, mxx - mnx), (th * 0.86) / Math.max(1, mxy - mny));
+  const cx = x0 + tw / 2 + (r() - 0.5) * tw * 0.05 * sc;
+  const cy = y0 + th / 2 + (r() - 0.5) * th * 0.08 * sc;
+  for (const q of pts) {
+    q.x = cx + (q.x - (mnx + mxx) / 2) * fitK;
+    q.y = cy + (q.y - (mny + mxy) / 2) * fitK;
+    q.fs *= fitK;
+  }
 
   let out = "";
   if (style === 0) out += membrane(pts, r, S, ink, lw);
