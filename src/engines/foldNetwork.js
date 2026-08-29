@@ -150,6 +150,19 @@ export function netExtent({ w, h, p, seed }) {
   return { x0: Math.max(0, ex0), x1: Math.min(w, ex1) };
 }
 
+// Where the mark's ink actually sits inside a w×h box (tiles=1): one disc per
+// letter plus the small "the" mark, in local coords. Contrast code samples
+// luminance under THESE — the cluster usually fills a fraction of its box, so
+// box-level sampling reads pixels the letters never touch and picks the wrong
+// ink for the ones they do.
+export function netInk({ w, h, p, seed }) {
+  const { pts } = layoutTile({ x0: 0, y0: 0, tw: w, th: h, p, seed, styleOverride: Math.round(p.style ?? 3) });
+  const discs = pts.map((q) => ({ x: q.x, y: q.y, r: q.fs * 0.6 }));
+  const t = thePos(pts, 0, 0);
+  discs.push({ x: t.tx - t.theFs * 0.95, y: t.ty, r: t.theFs * 0.8 }); // end-anchored text
+  return discs;
+}
+
 function renderTile({ x0, y0, tw, th, p, ink, seed, styleOverride }) {
   const { r, style, S, pts } = layoutTile({ x0, y0, tw, th, p, seed, styleOverride });
   const lw = p.weight * S / 700;

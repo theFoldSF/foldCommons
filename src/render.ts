@@ -4,12 +4,12 @@
 import { TYPE_RULES, isDark, type TypeRole } from "./brand/tokens";
 import { fontFamilyCss } from "./brand/fonts";
 import { SIGNATURE_ENGINE, engineById } from "./engines/index";
-import { netExtent } from "./engines/foldNetwork.js";
+import { netExtent, netInk } from "./engines/foldNetwork.js";
 import { framePath, ticketPath, scallopChipPath, scallopChipProtrusion } from "./frames/index";
 import { rng, smoothPath } from "./engines/util.js";
 import { markById } from "./marks/index";
 import { photoById, photoRegionLum } from "./photos/index";
-import { ARRANGEMENTS, docAccent, docGround, docSeason, docTemplate, type ChipStyle, type Doc, type XfKey } from "./state";
+import { ARRANGEMENTS, docAccent, docGround, docSeason, docTemplate, type ChipStyle, type Doc, type XfKey, type XfState } from "./state";
 import type { TextZone } from "./templates/index";
 
 const esc = (s: string) =>
@@ -510,6 +510,27 @@ function xfBox(
   return { x: cx - w / 2, y: cy - h / 2, w, h };
 }
 
+// A point pushed through a member transform (forward — mirrors xfWrap:
+// p' = c + R·S·(p − c + d)) and pulled back through one (inverse).
+function xfPt(t: XfState | undefined, cx: number, cy: number, x: number, y: number): { x: number; y: number } {
+  if (!t) return { x, y };
+  const rad = (t.rot * Math.PI) / 180;
+  const px = x - cx + t.dx, py = y - cy + t.dy;
+  return {
+    x: cx + t.s * (px * Math.cos(rad) - py * Math.sin(rad)),
+    y: cy + t.s * (px * Math.sin(rad) + py * Math.cos(rad)),
+  };
+}
+function xfPtInv(t: XfState | undefined, cx: number, cy: number, x: number, y: number): { x: number; y: number } {
+  if (!t) return { x, y };
+  const rad = (t.rot * Math.PI) / 180;
+  const px = (x - cx) / (t.s || 1), py = (y - cy) / (t.s || 1);
+  return {
+    x: cx + (px * Math.cos(rad) + py * Math.sin(rad)) - t.dx,
+    y: cy + (-px * Math.sin(rad) + py * Math.cos(rad)) - t.dy,
+  };
+}
+
 const C_LIGHT = "#FFF9F1", C_DARK = "#03071B";
 
 // Luminance of the full-bleed surfaces under a box: ground, veiled by the
@@ -540,11 +561,20 @@ function windowLumAt(
   const oy = Math.max(0, Math.min(box.y + box.h, win.y + win.h) - Math.max(box.y, win.y));
   const frac = Math.min(1, (ox * oy) / Math.max(1, box.w * box.h));
   if (frac <= 0) return null;
-  let lum = 0.5; // unknown upload pixels — a safe mid guess
+  return { frac, lum: windowContentLum(doc, win, box), win0 };
+}
+
+// Luminance of the window's content under `sub` — sub and the window rect in
+// the same coordinate space. Uploads have no luminance grid: a safe mid guess.
+function windowContentLum(
+  doc: Doc,
+  win: { x: number; y: number; w: number; h: number; kind: "photo" | "fill" },
+  sub: { x: number; y: number; w: number; h: number }
+): number {
   const p = photoById(doc.comp.photo);
-  if (win.kind === "fill" || (!doc.comp.upload && !p)) lum = hexLum(docAccent(doc, doc.comp.panelAccent));
-  else if (!doc.comp.upload && p) lum = photoRegionLum(p, box, win);
-  return { frac, lum, win0 };
+  if (win.kind === "fill" || (!doc.comp.upload && !p)) return hexLum(docAccent(doc, doc.comp.panelAccent));
+  if (!doc.comp.upload && p) return photoRegionLum(p, sub, win);
+  return 0.5;
 }
 
 // Contrast guardrail for marks that sit directly on the art (the net
@@ -565,6 +595,26 @@ function contrastInkAt(
   return L < 0.5 ? C_LIGHT : C_DARK;
 }
 
+// The tight box the "line" chip row actually occupies — real glyph widths,
+// same layout math as lineChipsSvg. Contrast wants the row's true footprint,
+// not a chars×size guess spanning half the canvas.
+function lineRowBox(
+  dateText: string,
+  timeText: string,
+  size: number,
+  anchor: number,
+  cy: number,
+  align: "start" | "end"
+): { x: number; y: number; w: number; h: number } {
+  const fam = fontFamilyCss("Figtree");
+  const dateW = dateText.trim() ? measureTextWidth(dateText, fam, 600, size) : 0;
+  const timeW = timeText.trim() ? measureTextWidth(timeText, fam, 600, size) : 0;
+  const gap = dateW && timeW ? size * 1.6 : 0;
+  const w = Math.max(1, dateW + timeW + gap);
+  const h = size * 1.75;
+  return { x: align === "end" ? anchor - w : anchor, y: cy - h / 2, w, h };
+}
+
 // The forward xfWrap transform (and its inverse) as SVG transform lists —
 // the inverse lets a userSpace clip defined in canvas coords survive inside
 // a transformed element group.
@@ -582,6 +632,10 @@ function xfInverseAttr(t: { dx: number; dy: number; s: number; rot: number } | u
 // both surfaces — so the mark is drawn twice, the base-ink copy everywhere
 // and the window-ink copy clipped to the window's actual frame shape, so
 // each letter flips color exactly at the boundary it crosses.
+// Both the straddle test and the ink choices come from the mark's ACTUAL
+// letters (netInk discs pushed through its transform), never its bounding
+// box — the cluster fills a fraction of the box, so a box that grazes a dark
+// photo says nothing about the pixels the letters really sit on.
 function splitSigSvg(
   doc: Doc,
   box: { x: number; y: number; w: number; h: number },
@@ -590,20 +644,37 @@ function splitSigSvg(
   heroBottom: number
 ): string {
   const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
-  const placed = xfBox(doc, "sig", box);
-  const baseInk = baseLumAt(doc, placed, W, H) < 0.5 ? C_LIGHT : C_DARK;
-  const wi = windowLumAt(doc, placed, W, heroBottom);
-  const winInk = wi && (wi.lum < 0.5 ? C_LIGHT : C_DARK);
   const sig = (ink: string) => signatureSvg(doc, box.x, box.y, box.w, box.h, ink);
-  if (!wi || !winInk || winInk === baseInk || wi.frac < 0.02 || wi.frac > 0.98) {
-    // one surface dominates — single ink, area-weighted
-    const ink = wi ? (wi.lum * wi.frac + baseLumAt(doc, placed, W, H) * (1 - wi.frac) < 0.5 ? C_LIGHT : C_DARK) : baseInk;
-    return xfWrap(doc, "sig", cx, cy, sig(ink));
+  const st = doc.comp.xf?.sig;
+  const discs = netInk({ w: box.w, h: box.h, p: sigEngineParams(doc), seed: doc.comp.sig.seed })
+    .map((d: { x: number; y: number; r: number }) => ({
+      ...xfPt(st, cx, cy, box.x + d.x, box.y + d.y),
+      r: d.r * (st?.s ?? 1),
+    }));
+  const w0 = layoutWindow(doc, W, heroBottom);
+  const pt = doc.comp.xf?.photo;
+  const wcx = w0 ? w0.x + w0.w / 2 : 0, wcy = w0 ? w0.y + w0.h / 2 : 0;
+  let inLum = 0, inN = 0, outLum = 0, outN = 0;
+  for (const d of discs) {
+    // pull the letter back into the window's own space to ask "over it?" —
+    // and to sample the photo where the letter lands after both transforms
+    const q = w0 ? xfPtInv(pt, wcx, wcy, d.x, d.y) : { x: 0, y: 0 };
+    if (w0 && q.x >= w0.x && q.x <= w0.x + w0.w && q.y >= w0.y && q.y <= w0.y + w0.h) {
+      const r0 = d.r / (pt?.s || 1);
+      inLum += windowContentLum(doc, w0, { x: q.x - r0, y: q.y - r0, w: r0 * 2, h: r0 * 2 });
+      inN++;
+    } else {
+      outLum += baseLumAt(doc, { x: d.x - d.r, y: d.y - d.r, w: d.r * 2, h: d.r * 2 }, W, H);
+      outN++;
+    }
   }
-  const w0 = wi.win0;
+  const inkIn = inN ? (inLum / inN < 0.5 ? C_LIGHT : C_DARK) : null;
+  const inkOut = outN ? (outLum / outN < 0.5 ? C_LIGHT : C_DARK) : null;
+  if (!w0 || !inkIn || !inkOut || inkIn === inkOut)
+    return xfWrap(doc, "sig", cx, cy, sig(inkIn ?? inkOut ?? docGround(doc).ink));
   const fp = framePath(doc.comp.frame, doc.comp.frameSeed, w0.w, w0.h);
-  const photoT = xfAttr(doc.comp.xf?.photo, w0.x + w0.w / 2, w0.y + w0.h / 2);
-  const invSig = xfInverseAttr(doc.comp.xf?.sig, cx, cy);
+  const photoT = xfAttr(pt, wcx, wcy);
+  const invSig = xfInverseAttr(st, cx, cy);
   const clipT = [invSig, photoT, `translate(${w0.x.toFixed(1)} ${w0.y.toFixed(1)})`, fp.transform ?? ""]
     .filter(Boolean)
     .join(" ");
@@ -613,7 +684,7 @@ function splitSigSvg(
     "sig",
     cx,
     cy,
-    `${sig(baseInk)}<clipPath id="${cid}" clipPathUnits="userSpaceOnUse"><path d="${fp.d}" transform="${clipT}"/></clipPath><g clip-path="url(#${cid})">${sig(winInk)}</g>`
+    `${sig(inkOut)}<clipPath id="${cid}" clipPathUnits="userSpaceOnUse"><path d="${fp.d}" transform="${clipT}"/></clipPath><g clip-path="url(#${cid})">${sig(inkIn)}</g>`
   );
 }
 
@@ -658,7 +729,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const chipCy = H - m * 0.8 - chipH / 2;
     const rowInk =
       chipStyle === "line"
-        ? contrastInkAt(doc, xfBox(doc, "date", { x: W - m - c.chipSize * 12, y: chipCy - chipH / 2, w: c.chipSize * 12, h: chipH }), W, H, hb)
+        ? contrastInkAt(doc, xfBox(doc, "date", lineRowBox(dateText, timeText, c.chipSize, W - m, chipCy, "end")), W, H, hb)
         : ink;
     const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
     wordsSvg += row.svg;
@@ -690,7 +761,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const chipCy = H - m * 0.55 - chipH / 2;
     const rowInk =
       chipStyle === "line"
-        ? contrastInkAt(doc, xfBox(doc, "date", { x: m * 0.6, y: chipCy - chipH / 2, w: c.chipSize * 12, h: chipH }), W, H, hb)
+        ? contrastInkAt(doc, xfBox(doc, "date", lineRowBox(dateText, timeText, c.chipSize, m * 0.6, chipCy, "start")), W, H, hb)
         : ink;
     const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, m * 0.6, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "start");
     wordsSvg += row.svg;
@@ -723,7 +794,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
     const rowInk =
       chipStyle === "line"
-        ? contrastInkAt(doc, xfBox(doc, "date", { x: W - m - c.chipSize * 12, y: rowCy - sigH / 2, w: c.chipSize * 12, h: sigH }), W, H, hb)
+        ? contrastInkAt(doc, xfBox(doc, "date", lineRowBox(dateText, timeText, c.chipSize, W - m, rowCy, "end")), W, H, hb)
         : ink;
     const row0 = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
     let rowOut = row0;
