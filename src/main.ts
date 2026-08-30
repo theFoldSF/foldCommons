@@ -21,7 +21,7 @@ import { FRAMES } from "./frames/index";
 import { MARKS, loadMarks } from "./marks/index";
 import { PHOTOS, loadPhotos, readUpload } from "./photos/index";
 import { TEMPLATES } from "./templates/index";
-import { renderDoc } from "./render";
+import { ensureArtLum, renderDoc } from "./render";
 import {
   ARRANGEMENTS,
   BG_FADE,
@@ -67,6 +67,9 @@ const rightPanel = $("#rightPanel");
 function renderCanvas() {
   canvasWrap.innerHTML = renderDoc(doc);
   attachXfInteractivity();
+  // warm the true-pixel luminance grid for contrast; when it lands (once per
+  // art change) re-render so sig/chip inks read the pixels actually beneath
+  ensureArtLum(doc, renderCanvas);
 }
 
 function h(html: string): HTMLElement {

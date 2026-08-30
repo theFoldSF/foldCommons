@@ -615,6 +615,31 @@ function lineRowBox(
   return { x: align === "end" ? anchor - w : anchor, y: cy - h / 2, w, h };
 }
 
+// Contrast for the bare-text chip row: true pixels sampled at a few points
+// along the row's real footprint (pushed through its transform), analytic
+// estimate while the grid warms.
+function rowContrastInk(
+  doc: Doc,
+  box: { x: number; y: number; w: number; h: number },
+  W: number,
+  H: number,
+  heroBottom: number
+): string {
+  const sample = artLumSampler(doc);
+  if (sample) {
+    const t = doc.comp.xf?.date;
+    const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+    const n = 5;
+    let L = 0;
+    for (let i = 0; i < n; i++) {
+      const p = xfPt(t, cx, cy, box.x + (box.w * (i + 0.5)) / n, cy);
+      L += sample(p.x, p.y, (box.h / 2) * (t?.s ?? 1));
+    }
+    return L / n < 0.5 ? C_LIGHT : C_DARK;
+  }
+  return contrastInkAt(doc, xfBox(doc, "date", box), W, H, heroBottom);
+}
+
 // The forward xfWrap transform (and its inverse) as SVG transform lists —
 // the inverse lets a userSpace clip defined in canvas coords survive inside
 // a transformed element group.
@@ -625,6 +650,119 @@ function xfAttr(t: { dx: number; dy: number; s: number; rot: number } | undefine
 function xfInverseAttr(t: { dx: number; dy: number; s: number; rot: number } | undefined, cx: number, cy: number): string {
   if (!t || (!t.dx && !t.dy && t.s === 1 && !t.rot)) return "";
   return `translate(${(-t.dx).toFixed(2)} ${(-t.dy).toFixed(2)}) translate(${cx.toFixed(2)} ${cy.toFixed(2)}) scale(${(1 / (t.s || 1)).toFixed(6)}) rotate(${(-t.rot).toFixed(2)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`;
+}
+
+// --- sampled-luminance ground truth ------------------------------------------
+// The analytic model above (ground + veil + window) can't see everything that
+// actually renders beneath the words — motif engines, frame shapes, uploads,
+// the texture veil. So the app rasterizes the art layers (everything under
+// the words) to a small offscreen grid, and contrast reads TRUE pixels when
+// the grid is warm. It is cached against the art-affecting slice of the doc;
+// on the first frame after an art change the analytic estimate stands in and
+// ensureArtLum()'s callback re-renders once the pixels land.
+
+const ART_N = 128; // long-edge cells — ~8px cells on a 1080 canvas
+let artLum: { key: string; nx: number; ny: number; grid: Float32Array } | null = null;
+let artLumPending: string | null = null;
+
+// Everything that changes pixels below the words layer. The words' own fields
+// (title/date/time, chip style, sig, their transforms) are deliberately out —
+// dragging the sig must not invalidate the grid it samples against.
+function artKey(doc: Doc): string {
+  const c = doc.comp;
+  return JSON.stringify([
+    doc.template, doc.register, doc.ground, doc.season, doc.fields.prose,
+    c.layout, c.words, c.arrange, c.frame, c.frameSeed, c.photo,
+    c.upload?.length ?? 0, c.bg, c.bgFade, c.panelAccent,
+    c.xf?.photo, c.xf?.motif, c.xf?.prose, doc.motif,
+  ]);
+}
+
+export function ensureArtLum(doc: Doc, onReady?: () => void): void {
+  const t = docTemplate(doc);
+  if (!t.composed) return;
+  const key = artKey(doc);
+  if (artLum?.key === key || artLumPending === key) return;
+  artLumPending = key;
+  const W = t.w, H = t.h;
+  const g = docGround(doc);
+  const art = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${g.hex}"/>${composedSvg(doc, W, H, true)}</svg>`;
+  const k = ART_N / Math.max(W, H);
+  const nx = Math.max(1, Math.round(W * k)), ny = Math.max(1, Math.round(H * k));
+  const img = new Image();
+  img.onload = () => {
+    if (artLumPending !== key) return; // superseded by a newer art state
+    try {
+      const cv = document.createElement("canvas");
+      cv.width = nx;
+      cv.height = ny;
+      const ctx = cv.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0, nx, ny);
+      const data = ctx.getImageData(0, 0, nx, ny).data;
+      const grid = new Float32Array(nx * ny);
+      for (let i = 0; i < grid.length; i++) {
+        const o = i * 4;
+        grid[i] = (0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]) / 255;
+      }
+      artLum = { key, nx, ny, grid };
+      artLumPending = null;
+      onReady?.();
+    } catch {
+      artLumPending = null;
+    }
+  };
+  img.onerror = () => {
+    if (artLumPending === key) artLumPending = null;
+  };
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(art);
+}
+
+// Mean true luminance under a small box, or null while the grid is cold.
+function artLumSampler(doc: Doc): ((x: number, y: number, r: number) => number) | null {
+  if (!artLum || artLum.key !== artKey(doc)) return null;
+  const { nx, ny, grid } = artLum;
+  const t = docTemplate(doc);
+  const kx = nx / t.w, ky = ny / t.h;
+  return (x, y, r) => {
+    const i0 = Math.max(0, Math.min(nx - 1, Math.floor((x - r) * kx)));
+    const i1 = Math.max(i0, Math.min(nx - 1, Math.ceil((x + r) * kx) - 1));
+    const j0 = Math.max(0, Math.min(ny - 1, Math.floor((y - r) * ky)));
+    const j1 = Math.max(j0, Math.min(ny - 1, Math.ceil((y + r) * ky) - 1));
+    let s = 0, n = 0;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { s += grid[j * nx + i]; n++; }
+    return n ? s / n : 0.5;
+  };
+}
+
+// Point-in-the-window's-ACTUAL-frame-shape — Path2D hit test. The window rect
+// is only the frame's bound; blob/drape shapes sit well inside it, and a mark
+// between shape and rect is really on the ground. framePath emits only two
+// transform forms (translate+scale, translate+rotate-about-point), parsed
+// into a DOMMatrix here.
+let hitCtx: CanvasRenderingContext2D | null | undefined;
+function frameHitTester(
+  fp: { d: string; transform?: string },
+  w0: { x: number; y: number }
+): ((x: number, y: number) => boolean) | null {
+  try {
+    if (hitCtx === undefined) hitCtx = document.createElement("canvas").getContext("2d");
+    if (!hitCtx) return null;
+    const m = new DOMMatrix();
+    for (const match of (fp.transform ?? "").matchAll(/(translate|scale|rotate)\(([^)]*)\)/g)) {
+      const a = match[2].trim().split(/[\s,]+/).map(Number);
+      if (match[1] === "translate") m.translateSelf(a[0], a[1] ?? 0);
+      else if (match[1] === "scale") m.scaleSelf(a[0], a[1] ?? a[0]);
+      else if (a.length >= 3) { m.translateSelf(a[1], a[2]); m.rotateSelf(a[0]); m.translateSelf(-a[1], -a[2]); }
+      else m.rotateSelf(a[0]);
+    }
+    const path = new Path2D();
+    path.addPath(new Path2D(fp.d), m);
+    const ctx = hitCtx;
+    return (x, y) => ctx.isPointInPath(path, x - w0.x, y - w0.y);
+  } catch {
+    return null;
+  }
 }
 
 // The signature with SPLIT contrast: when the mark straddles the photo/panel
@@ -654,25 +792,33 @@ function splitSigSvg(
   const w0 = layoutWindow(doc, W, heroBottom);
   const pt = doc.comp.xf?.photo;
   const wcx = w0 ? w0.x + w0.w / 2 : 0, wcy = w0 ? w0.y + w0.h / 2 : 0;
+  const fp = w0 ? framePath(doc.comp.frame, doc.comp.frameSeed, w0.w, w0.h) : null;
+  // "over the window" means over the frame's actual shape, not its bound —
+  // blob/drape shapes leave real ground showing inside the rect
+  const hit = w0 && fp ? frameHitTester(fp, w0) : null;
+  const sample = artLumSampler(doc); // true pixels, when the grid is warm
   let inLum = 0, inN = 0, outLum = 0, outN = 0;
   for (const d of discs) {
-    // pull the letter back into the window's own space to ask "over it?" —
-    // and to sample the photo where the letter lands after both transforms
+    // pull the letter back into the window's own space to ask "over it?"
     const q = w0 ? xfPtInv(pt, wcx, wcy, d.x, d.y) : { x: 0, y: 0 };
-    if (w0 && q.x >= w0.x && q.x <= w0.x + w0.w && q.y >= w0.y && q.y <= w0.y + w0.h) {
+    const inside =
+      !!w0 &&
+      (hit
+        ? hit(q.x, q.y)
+        : q.x >= w0.x && q.x <= w0.x + w0.w && q.y >= w0.y && q.y <= w0.y + w0.h);
+    let lum: number;
+    if (sample) lum = sample(d.x, d.y, d.r);
+    else if (inside && w0) {
       const r0 = d.r / (pt?.s || 1);
-      inLum += windowContentLum(doc, w0, { x: q.x - r0, y: q.y - r0, w: r0 * 2, h: r0 * 2 });
-      inN++;
-    } else {
-      outLum += baseLumAt(doc, { x: d.x - d.r, y: d.y - d.r, w: d.r * 2, h: d.r * 2 }, W, H);
-      outN++;
-    }
+      lum = windowContentLum(doc, w0, { x: q.x - r0, y: q.y - r0, w: r0 * 2, h: r0 * 2 });
+    } else lum = baseLumAt(doc, { x: d.x - d.r, y: d.y - d.r, w: d.r * 2, h: d.r * 2 }, W, H);
+    if (inside) { inLum += lum; inN++; }
+    else { outLum += lum; outN++; }
   }
   const inkIn = inN ? (inLum / inN < 0.5 ? C_LIGHT : C_DARK) : null;
   const inkOut = outN ? (outLum / outN < 0.5 ? C_LIGHT : C_DARK) : null;
-  if (!w0 || !inkIn || !inkOut || inkIn === inkOut)
+  if (!w0 || !fp || !inkIn || !inkOut || inkIn === inkOut)
     return xfWrap(doc, "sig", cx, cy, sig(inkIn ?? inkOut ?? docGround(doc).ink));
-  const fp = framePath(doc.comp.frame, doc.comp.frameSeed, w0.w, w0.h);
   const photoT = xfAttr(pt, wcx, wcy);
   const invSig = xfInverseAttr(st, cx, cy);
   const clipT = [invSig, photoT, `translate(${w0.x.toFixed(1)} ${w0.y.toFixed(1)})`, fp.transform ?? ""]
@@ -695,7 +841,9 @@ function sigEngineParams(doc: Doc): Record<string, number> {
   return { ...sp, tiles: 1, size: (sp.size ?? 1) * 2.2, weight: (sp.weight ?? 1) * 3 };
 }
 
-function composedSvg(doc: Doc, W: number, H: number): string {
+// artOnly: just the layers beneath the words — what ensureArtLum rasterizes
+// for true-pixel contrast sampling.
+function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
   const t = docTemplate(doc);
   const c = t.comp!;
   const g = docGround(doc);
@@ -729,7 +877,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const chipCy = H - m * 0.8 - chipH / 2;
     const rowInk =
       chipStyle === "line"
-        ? contrastInkAt(doc, xfBox(doc, "date", lineRowBox(dateText, timeText, c.chipSize, W - m, chipCy, "end")), W, H, hb)
+        ? rowContrastInk(doc, lineRowBox(dateText, timeText, c.chipSize, W - m, chipCy, "end"), W, H, hb)
         : ink;
     const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
     wordsSvg += row.svg;
@@ -761,7 +909,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const chipCy = H - m * 0.55 - chipH / 2;
     const rowInk =
       chipStyle === "line"
-        ? contrastInkAt(doc, xfBox(doc, "date", lineRowBox(dateText, timeText, c.chipSize, m * 0.6, chipCy, "start")), W, H, hb)
+        ? rowContrastInk(doc, lineRowBox(dateText, timeText, c.chipSize, m * 0.6, chipCy, "start"), W, H, hb)
         : ink;
     const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, m * 0.6, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "start");
     wordsSvg += row.svg;
@@ -794,7 +942,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
     const rowInk =
       chipStyle === "line"
-        ? contrastInkAt(doc, xfBox(doc, "date", lineRowBox(dateText, timeText, c.chipSize, W - m, rowCy, "end")), W, H, hb)
+        ? rowContrastInk(doc, lineRowBox(dateText, timeText, c.chipSize, W - m, rowCy, "end"), W, H, hb)
         : ink;
     const row0 = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
     let rowOut = row0;
@@ -866,7 +1014,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     const winX = m * 0.7, winY = heroTop, winW = W - m * 1.4, winH = heroBottom - heroTop;
     const win = xfWrap(doc, "photo", winX + winW / 2, winY + winH / 2,
       frameWindow(doc, winX, winY, winW, winH, comp.layout === "panel" ? "fill" : "photo"));
-    return bg + win + proseSvgOut + wordsSvg;
+    return bg + win + proseSvgOut + (artOnly ? "" : wordsSvg);
   }
 
   const mp = m * 0.45; // motif padding off the canvas edge
@@ -875,7 +1023,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
     // the motif runs the frame, padded off the edges
     const b = { x: mp, y: mp, w: W - mp * 2, h: heroBottom - mp * 2 };
     const motifLayer = xfWrap(doc, "motif", b.x + b.w / 2, b.y + b.h / 2, motifWindowSvg(doc, b));
-    return bg + motifLayer + proseSvgOut + wordsSvg;
+    return bg + motifLayer + proseSvgOut + (artOnly ? "" : wordsSvg);
   }
 
   // collage & backdrop: a bounded motif window and a framed photo, both
@@ -885,7 +1033,7 @@ function composedSvg(doc: Doc, W: number, H: number): string {
   const { motif: mb, photo: pb } = arrangeBoxes(comp.arrange, comp.frameSeed, area.x0, area.y0, area.x1, area.y1);
   const motifLayer = xfWrap(doc, "motif", mb.x + mb.w / 2, mb.y + mb.h / 2, motifWindowSvg(doc, mb));
   const photoLayer = xfWrap(doc, "photo", pb.x + pb.w / 2, pb.y + pb.h / 2, frameWindow(doc, pb.x, pb.y, pb.w, pb.h, "photo"));
-  return bg + motifLayer + photoLayer + proseSvgOut + wordsSvg;
+  return bg + motifLayer + photoLayer + proseSvgOut + (artOnly ? "" : wordsSvg);
 }
 
 // --- diagram kit -------------------------------------------------------------
