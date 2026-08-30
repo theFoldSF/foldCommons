@@ -54,6 +54,15 @@ function layoutTile({ x0, y0, tw, th, p, seed, styleOverride }) {
   // non-adjacent letters too, and the whole cluster is fit-scaled to the tile.
   const sc = p.scatter;
   const fss = LETTERS.map(() => fs * (0.72 + r() * 0.7));
+  // The signature mark wants every letter the same size (not the sketch-page
+  // per-letter jitter this loop draws for the general motif). r() must still
+  // be consumed once per letter above regardless — render/netExtent/netInk
+  // all share this layout, so their rng streams have to stay in lockstep —
+  // this only overwrites the sizes AFTER that consumption.
+  if (p.even) {
+    const avgFs = fss.reduce((a, b) => a + b, 0) / fss.length;
+    fss.fill(avgFs);
+  }
   const rows =
     r() < 0.25 && th > fs * 3.4 ? [[0, 1], [2, 3]] : [[0, 1, 2, 3]];
   const pts = [];

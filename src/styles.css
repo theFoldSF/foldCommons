@@ -241,6 +241,67 @@ button.mini:hover { border-color: var(--ink); }
   margin: 14px 0;
 }
 
+/* collapsible right-panel sections */
+.panel-section { border-bottom: 1px solid var(--rule-soft); }
+.panel-section:last-child { border-bottom: none; }
+.panel-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.panel-section-head h3.panel-title { margin: 0; flex: 1; }
+.panel-section:first-child .panel-section-head h3.panel-title { margin-top: 0; }
+.panel-section-head .chev {
+  font-family: "Fira Code", monospace;
+  font-size: 12px;
+  opacity: 0.5;
+  transition: transform 0.18s ease;
+  flex: 0 0 auto;
+  padding: 24px 0 10px;
+}
+.panel-section:first-child .panel-section-head .chev { padding-top: 0; }
+.panel-section.open .panel-section-head .chev { transform: rotate(90deg); }
+.panel-section-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.22s ease;
+}
+.panel-section-inner { padding-bottom: 16px; }
+.panel-section-head:hover h3.panel-title { opacity: 1; }
+
+/* top bar: undo/redo */
+#topbar .history {
+  display: flex;
+  gap: 4px;
+  margin-left: 18px;
+}
+#topbar .history button {
+  background: var(--cream);
+  border: 1.5px solid var(--rule);
+  color: var(--ink);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#topbar .history button:hover:not(:disabled) { border-color: var(--ink); }
+#topbar .history button:disabled { opacity: 0.32; cursor: default; }
+
 /* gallery */
 #galleryView { padding: 30px; overflow-y: auto; display: none; flex-wrap: wrap; gap: 22px; align-content: flex-start; }
 #galleryView.active { display: flex; }

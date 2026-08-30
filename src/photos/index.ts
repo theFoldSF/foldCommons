@@ -95,6 +95,38 @@ function imageSize(src: string): Promise<{ w: number; h: number; lum?: Float32Ar
   });
 }
 
+// Shape returned by the fold-commons-backend worker's GET /photos (see
+// backend/src/index.ts). `url` is an absolute URL back to the worker's own
+// GET /photos/:id route, so we can fetch bytes straight from it.
+interface RemotePhotoMeta {
+  id: string;
+  name: string;
+  url: string;
+  w: number;
+  h: number;
+}
+
+// Optional community backend (Cloudflare Worker + R2, see backend/). When
+// VITE_FOLD_API is unset, this is a no-op and the app behaves exactly as
+// it did with only the bundled manifest.
+async function loadRemotePhotos(): Promise<Photo[]> {
+  const base = import.meta.env.VITE_FOLD_API;
+  if (!base) return [];
+  try {
+    const metas: RemotePhotoMeta[] = await (await fetch(`${base}/photos`)).json();
+    const loaded = await Promise.all(
+      metas.map(async (m) => {
+        // `url` is already absolute (points at the worker itself).
+        const d = await toDataUri(m.url);
+        return d ? { id: m.id, name: m.name, ...d } : null;
+      })
+    );
+    return loaded.filter((p): p is Photo => !!p);
+  } catch {
+    return [];
+  }
+}
+
 export async function loadPhotos(onLoaded?: () => void) {
   try {
     const manifest: { id: string; name: string; file: string }[] = await (
@@ -107,10 +139,22 @@ export async function loadPhotos(onLoaded?: () => void) {
       })
     );
     PHOTOS.push(...loaded.filter((p): p is Photo => !!p));
-    onLoaded?.();
   } catch {
-    // no library on this deploy — uploads still work
+    // no bundled library on this deploy — uploads still work
   }
+
+  // Remote photos are additive: merge in anything from the backend, keeping
+  // bundled ids authoritative on collision (skip rather than overwrite, so
+  // a same-named remote upload never silently replaces a bundled photo).
+  const existingIds = new Set(PHOTOS.map((p) => p.id));
+  const remote = await loadRemotePhotos();
+  for (const p of remote) {
+    if (existingIds.has(p.id)) continue;
+    existingIds.add(p.id);
+    PHOTOS.push(p);
+  }
+
+  onLoaded?.();
 }
 
 export const photoById = (id: string) => PHOTOS.find((p) => p.id === id);

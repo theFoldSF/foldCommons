@@ -5,11 +5,11 @@ import { TYPE_RULES, isDark, type TypeRole } from "./brand/tokens";
 import { fontFamilyCss } from "./brand/fonts";
 import { SIGNATURE_ENGINE, engineById } from "./engines/index";
 import { netExtent, netInk } from "./engines/foldNetwork.js";
-import { framePath, ticketPath, scallopChipPath, scallopChipProtrusion } from "./frames/index";
+import { framePath, ticketPath, scallopChipPath, scallopChipProtrusion, frameAspect, scallopShrink } from "./frames/index";
 import { rng, smoothPath } from "./engines/util.js";
 import { markById } from "./marks/index";
 import { photoById, photoRegionLum } from "./photos/index";
-import { ARRANGEMENTS, docAccent, docGround, docSeason, docTemplate, type ChipStyle, type Doc, type XfKey, type XfState } from "./state";
+import { ARRANGEMENTS, docAccent, docGround, docSeason, docTemplate, textXfKey, type ChipStyle, type Doc, type TextBoxState, type XfKey, type XfState } from "./state";
 import type { TextZone } from "./templates/index";
 
 const esc = (s: string) =>
@@ -144,6 +144,48 @@ function chipSvg(
   };
 }
 
+// Shared layout math for the "line" chip style — real glyph widths, left
+// edges, baseline/squiggle/pill y's, and the unit's own bounding width — with
+// no ink dependency, so both the drawer (lineChipsSvg) and the split-contrast
+// disc sampler (splitLineChipsSvg) read the exact same geometry.
+function lineChipsLayout(
+  dateText: string,
+  timeText: string,
+  anchor: number,
+  cy: number,
+  size: number,
+  align: "start" | "end"
+) {
+  const hasDate = dateText.trim().length > 0;
+  const hasTime = timeText.trim().length > 0;
+  const fam = fontFamilyCss("Figtree");
+  const dateW = hasDate ? measureTextWidth(dateText, fam, 600, size) : 0;
+  const timeW = hasTime ? measureTextWidth(timeText, fam, 600, size) : 0;
+  const gap = size * 1.6;
+  const pillW = size * 0.95, pillH = size * 0.2;
+  const textY = cy - size * 0.35; // baseline
+  const squiggleY = textY - size * 0.35; // vertical center of the text
+  const pillY = cy + size * 0.34; // close under the text
+
+  // Always lay out left→right (date, then time); compute each element's own
+  // left edge directly so "start"/"end" only shifts the whole unit, never
+  // the internal reading order.
+  let dateLeft: number, timeLeft: number;
+  if (align === "end") {
+    const timeRight = anchor;
+    timeLeft = timeRight - timeW;
+    const dateRight = hasTime ? timeLeft - gap : timeRight;
+    dateLeft = dateRight - dateW;
+  } else {
+    dateLeft = anchor;
+    const dateRight = dateLeft + dateW;
+    timeLeft = hasDate ? dateRight + gap : dateLeft;
+  }
+  const leftEdge = Math.min(hasDate ? dateLeft : Infinity, hasTime ? Math.min(timeLeft, timeLeft + timeW - pillW) : Infinity);
+  const rightEdge = Math.max(hasDate ? dateLeft + Math.max(dateW, pillW) : -Infinity, hasTime ? timeLeft + timeW : -Infinity);
+  return { hasDate, hasTime, dateW, timeW, pillW, pillH, textY, squiggleY, pillY, dateLeft, timeLeft, w: rightEdge - leftEdge };
+}
+
 // "line" chip style: date and time as plain ink text (no fill shape), a
 // small hand-drawn squiggle connecting them, and a small fully-rounded color
 // pill beneath each — one composed unit (both accent pickers still drive the
@@ -161,34 +203,9 @@ function lineChipsSvg(
   ink: string,
   align: "start" | "end" = "end"
 ): { svg: string; w: number } {
-  const hasDate = dateText.trim().length > 0;
-  const hasTime = timeText.trim().length > 0;
-  if (!hasDate && !hasTime) return { svg: "", w: 0 };
-  // real glyph widths — the squiggle and the pills key off the exact text
-  // edges, so a char-count estimate reads as visible misalignment here
-  const fam = fontFamilyCss("Figtree");
-  const dateW = hasDate ? measureTextWidth(dateText, fam, 600, size) : 0;
-  const timeW = hasTime ? measureTextWidth(timeText, fam, 600, size) : 0;
-  const gap = size * 1.6;
-  const pillW = size * 0.95, pillH = size * 0.2;
-  const textY = cy - size * 0.35; // baseline
-  const squiggleY = textY - size * 0.35; // vertical center of the text (it only spans the gap between the two texts, so it never runs under a glyph)
-  const pillY = cy + size * 0.34; // close under the text
-
-  // Always lay out left→right (date, then time); compute each element's own
-  // left edge directly so "start"/"end" only shifts the whole unit, never
-  // the internal reading order.
-  let dateLeft: number, timeLeft: number;
-  if (align === "end") {
-    const timeRight = anchor;
-    timeLeft = timeRight - timeW;
-    const dateRight = hasTime ? timeLeft - gap : timeRight;
-    dateLeft = dateRight - dateW;
-  } else {
-    dateLeft = anchor;
-    const dateRight = dateLeft + dateW;
-    timeLeft = hasDate ? dateRight + gap : dateLeft;
-  }
+  const L = lineChipsLayout(dateText, timeText, anchor, cy, size, align);
+  if (!L.hasDate && !L.hasTime) return { svg: "", w: 0 };
+  const { dateW, timeW, pillW, pillH, textY, squiggleY, pillY, dateLeft, timeLeft } = L;
 
   const one = (text: string, left: number, w: number, accent: string, pillLeft: number) => {
     if (!text.trim()) return "";
@@ -197,7 +214,7 @@ function lineChipsSvg(
       <rect x="${pillLeft.toFixed(1)}" y="${(pillY - pillH / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${pillH.toFixed(1)}" rx="${(pillH / 2).toFixed(1)}" fill="${accent}"/>`;
   };
   let svg = "";
-  if (hasDate && hasTime) {
+  if (L.hasDate && L.hasTime) {
     // a gentle hand-drawn connector, not a jagged squiggle — small amplitude,
     // smoothed, sitting clear of both the text above and the pills below
     const rr = rng(seed >>> 0);
@@ -218,9 +235,54 @@ function lineChipsSvg(
   // date text's start, the time pill's right edge under the time text's end.
   svg += one(dateText, dateLeft, pillW, dateAccent, dateLeft);
   svg += one(timeText, timeLeft, pillW, timeAccent, timeLeft + timeW - pillW);
-  const leftEdge = Math.min(hasDate ? dateLeft : Infinity, hasTime ? Math.min(timeLeft, timeLeft + timeW - pillW) : Infinity);
-  const rightEdge = Math.max(hasDate ? dateLeft + Math.max(dateW, pillW) : -Infinity, hasTime ? timeLeft + timeW : -Infinity);
-  return { svg: `<g>${svg}</g>`, w: rightEdge - leftEdge };
+  return { svg: `<g>${svg}</g>`, w: L.w };
+}
+
+// Split-contrast version of the "line" chip row — the same treatment as the
+// signature: sample discs along the date/time text's REAL glyph runs (every
+// ~0.5em, radius ~0.5×size), push them through the row's own "date" transform,
+// and let splitInkSvg render base-ink/window-ink copies of the WHOLE row
+// (text, squiggle, and pills all re-rendered per ink — the pills' own accent
+// fill is unaffected by `ink`, only the text/squiggle color is). Falls back
+// to the single-ink lineChipsSvg's shape when nothing straddles a boundary.
+function splitLineChipsSvg(
+  doc: Doc,
+  dateText: string,
+  timeText: string,
+  dateAccent: string,
+  timeAccent: string,
+  anchor: number,
+  cy: number,
+  size: number,
+  seed: number,
+  align: "start" | "end",
+  W: number,
+  H: number,
+  heroBottom: number
+): { svg: string; w: number } {
+  const L = lineChipsLayout(dateText, timeText, anchor, cy, size, align);
+  if (!L.hasDate && !L.hasTime) return { svg: "", w: 0 };
+  const cx = align === "end" ? anchor - L.w / 2 : anchor + L.w / 2;
+  const midY = L.textY - size * 0.35; // vertical center of the glyphs
+  const discR = size * 0.5;
+  const step = size * 0.5;
+  const runDiscs = (left: number, w: number): { x: number; y: number; r: number }[] => {
+    if (w <= 0) return [];
+    const n = Math.max(1, Math.round(w / step));
+    const out: { x: number; y: number; r: number }[] = [];
+    for (let i = 0; i <= n; i++) out.push({ x: left + (w * i) / n, y: midY, r: discR });
+    return out;
+  };
+  const localDiscs = [
+    ...(L.hasDate ? runDiscs(L.dateLeft, L.dateW) : []),
+    ...(L.hasTime ? runDiscs(L.timeLeft, L.timeW) : []),
+  ];
+  const st = doc.comp.xf?.date;
+  const discs = localDiscs.map((d) => ({ ...xfPt(st, cx, cy, d.x, d.y), r: d.r * (st?.s ?? 1) }));
+  const render = (ink: string) =>
+    lineChipsSvg(dateText, timeText, dateAccent, timeAccent, anchor, cy, size, seed, ink, align).svg;
+  const svg = splitInkSvg(doc, "date", cx, cy, discs, render, W, H, heroBottom);
+  return { svg, w: L.w };
 }
 
 // The framed window: photo (cover-fit), flat accent, or motif — clipped by an
@@ -313,15 +375,18 @@ function chipsRow(
   cy: number,
   size: number,
   seedBase: number,
-  ink: string,
-  align: "start" | "end"
+  align: "start" | "end",
+  W: number,
+  H: number,
+  heroBottom: number
 ): { svg: string; farEdge: number; hasAny: boolean } {
   if (chipStyle === "line") {
-    const unit = lineChipsSvg(dateText, timeText, dateAccent, timeAccent, anchor, cy, size, seedBase, ink, align);
+    // split contrast, same treatment as the signature — text/squiggle ink
+    // flips at the art boundary underneath it; pills keep their own accent.
+    const unit = splitLineChipsSvg(doc, dateText, timeText, dateAccent, timeAccent, anchor, cy, size, seedBase, align, W, H, heroBottom);
     if (!unit.svg) return { svg: "", farEdge: anchor, hasAny: false };
-    const cx = align === "end" ? anchor - unit.w / 2 : anchor + unit.w / 2;
     return {
-      svg: xfWrap(doc, "date", cx, cy, unit.svg),
+      svg: unit.svg,
       farEdge: align === "end" ? anchor - unit.w : anchor + unit.w,
       hasAny: true,
     };
@@ -403,20 +468,58 @@ function titlePlateBelowBaseline(size: number): number {
   return size * (TITLE_PLATE.descent + TITLE_PLATE.padY);
 }
 
-// Title text on a big rounded-outline plate — the contrast card a title
-// needs when it sits directly over a photo/motif instead of on plain ground
-// (the "corners" and "stack" words layouts). Centered on the text: equal
-// padding above the cap-height and below the deepest descender.
-function titlePlateSvg(str: string, x: number, yBaseline: number, align: "start" | "end", size: number, w: number, ink: string, ground: string): string {
-  const padX = titlePlatePadX(size);
-  const left = align === "start" ? x - padX : x - w - padX;
-  const right = align === "start" ? x + w + padX : x + padX;
-  const top = yBaseline - titlePlateAboveBaseline(size);
-  const bottom = yBaseline + titlePlateBelowBaseline(size);
-  const rx = Math.min(size * 0.42, (bottom - top) / 2);
-  const plate = `<rect x="${left.toFixed(1)}" y="${top.toFixed(1)}" width="${(right - left).toFixed(1)}" height="${(bottom - top).toFixed(1)}"
-    rx="${rx.toFixed(1)}" fill="${ground}" stroke="${ink}" stroke-width="2"/>`;
-  return plate + titleTextSvg(str, x, yBaseline, align, size, ink);
+// A frame shape's box, sized to fully contain a content rect of contentW ×
+// contentH: identity for the generated shapes (wobble/swoop), inflated to
+// match the designer shapes' own aspect (blob/drape — framePath letterboxes
+// them into a mismatched box rather than stretching, so the box has to meet
+// the shape's aspect instead), and inflated by the tilt shrink for scallop
+// (its tabbed rect is generated smaller than its slot, then rotated a few
+// degrees, so the box needs to be bigger than the content by that margin).
+function sizeFrameBox(frameId: string, frameSeed: number, contentW: number, contentH: number): { w: number; h: number } {
+  const asp = frameAspect(frameId);
+  if (asp) {
+    return contentW / contentH > asp
+      ? { w: contentW, h: contentW / asp }
+      : { w: contentH * asp, h: contentH };
+  }
+  if (frameId === "scallop") {
+    const shrink = scallopShrink(frameSeed, contentW, contentH);
+    return { w: contentW / shrink, h: contentH / shrink };
+  }
+  return { w: contentW, h: contentH };
+}
+
+// A framePath shape sized to its content (see sizeFrameBox) with that content
+// drawn centered inside it — the shared plate used by the title and every
+// text box, so both can take any frame shape. `content` draws into a local
+// coordinate frame that is exactly contentW×contentH (top-left at 0,0);
+// callers position that frame's center with cx/cy. For every shape except a
+// tilting one (scallop), that local frame doubles as the outer box (designer
+// shapes are pre-sized to fill it exactly; wobble/swoop have no box/content
+// gap at all) — only scallop's tilt needs content grouped WITH the path under
+// its own rotate transform to stay visually centered in the tilted shape.
+function framedPlate(
+  frameId: string,
+  frameSeed: number,
+  contentW: number,
+  contentH: number,
+  ink: string,
+  ground: string,
+  strokeW: number,
+  content: (cx: number, cy: number) => string
+): { svg: string; w: number; h: number } {
+  const box = sizeFrameBox(frameId, frameSeed, contentW, contentH);
+  const fp = framePath(frameId, frameSeed, box.w, box.h);
+  const path = (d: string, t?: string) =>
+    `<path d="${d}"${t ? ` transform="${t}"` : ""} fill="${ground}" stroke="${ink}" stroke-width="${strokeW}"/>`;
+  if (frameId === "scallop" && fp.transform) {
+    // content frame == contentW×contentH exactly (scallopShrink is aspect-
+    // only, so it round-trips): draw path (already in that same pre-tilt
+    // frame) and content together, then tilt the pair as one group.
+    const inner = path(fp.d) + content(contentW / 2, contentH / 2);
+    return { svg: `<g transform="${fp.transform}">${inner}</g>`, w: box.w, h: box.h };
+  }
+  return { svg: path(fp.d, fp.transform) + content(box.w / 2, box.h / 2), w: box.w, h: box.h };
 }
 
 // Motif layers live in a bounded, padded window — a nested svg clips them, so
@@ -424,8 +527,15 @@ function titlePlateSvg(str: string, x: number, yBaseline: number, align: "start"
 function motifWindowSvg(doc: Doc, b: { x: number; y: number; w: number; h: number }): string {
   // an invisible full-box hit rect first — many motif engines are sparse
   // (thin strokes, lots of empty space), and the transform-tool hover needs
-  // to trigger anywhere over the box, not just on painted pixels
-  const hit = `<rect width="${b.w.toFixed(1)}" height="${b.h.toFixed(1)}" fill="#000" fill-opacity="0"/>`;
+  // to trigger anywhere over the box, not just on painted pixels. The sculpt
+  // engine is the one exception: it's a single solid cutout image with its
+  // own real aspect, seeded smaller than the slot — the hit rect (and so the
+  // transform-tool's bounding box, which is just this group's getBBox()) has
+  // to hug that image, not the whole padded slot.
+  const hit =
+    doc.motif?.engine === "sculpt"
+      ? ""
+      : `<rect width="${b.w.toFixed(1)}" height="${b.h.toFixed(1)}" fill="#000" fill-opacity="0"/>`;
   return `<svg x="${b.x.toFixed(1)}" y="${b.y.toFixed(1)}" width="${b.w.toFixed(1)}" height="${b.h.toFixed(1)}"
     viewBox="0 0 ${b.w.toFixed(1)} ${b.h.toFixed(1)}" overflow="hidden">${hit}${motifArt(doc, b.w, b.h)}</svg>`;
 }
@@ -486,30 +596,6 @@ function layoutWindow(
   return { ...photo, kind: "photo" };
 }
 
-// An element's base box pushed through its member transform — the
-// axis-aligned bound of the translated/scaled/rotated rect. Contrast has to
-// judge where an element actually ended up after the transform tool moved
-// it, not where the layout first placed it. Mirrors xfWrap's composition:
-// translate(c) rotate scale translate(-c) translate(d) ⇒ center → c + R(s·d).
-function xfBox(
-  doc: Doc,
-  key: XfKey,
-  box: { x: number; y: number; w: number; h: number }
-): { x: number; y: number; w: number; h: number } {
-  const t = doc.comp.xf?.[key];
-  if (!t) return box;
-  const rad = ((t.rot ?? 0) * Math.PI) / 180;
-  const s = t.s ?? 1;
-  const ddx = s * ((t.dx ?? 0) * Math.cos(rad) - (t.dy ?? 0) * Math.sin(rad));
-  const ddy = s * ((t.dx ?? 0) * Math.sin(rad) + (t.dy ?? 0) * Math.cos(rad));
-  const cx = box.x + box.w / 2 + ddx;
-  const cy = box.y + box.h / 2 + ddy;
-  const w0 = box.w * s, h0 = box.h * s;
-  const w = Math.abs(Math.cos(rad)) * w0 + Math.abs(Math.sin(rad)) * h0;
-  const h = Math.abs(Math.sin(rad)) * w0 + Math.abs(Math.cos(rad)) * h0;
-  return { x: cx - w / 2, y: cy - h / 2, w, h };
-}
-
 // A point pushed through a member transform (forward — mirrors xfWrap:
 // p' = c + R·S·(p − c + d)) and pulled back through one (inverse).
 function xfPt(t: XfState | undefined, cx: number, cy: number, x: number, y: number): { x: number; y: number } {
@@ -545,25 +631,6 @@ function baseLumAt(doc: Doc, box: { x: number; y: number; w: number; h: number }
   return L;
 }
 
-// The photo/panel window's overlap with a box, and the window content's
-// luminance sampled there. `win0` is the untransformed layout rect (for
-// rebuilding its clip shape); `win` is where the member's transform put it.
-function windowLumAt(
-  doc: Doc,
-  box: { x: number; y: number; w: number; h: number },
-  W: number,
-  heroBottom: number
-): { frac: number; lum: number; win0: NonNullable<ReturnType<typeof layoutWindow>> } | null {
-  const win0 = layoutWindow(doc, W, heroBottom);
-  if (!win0) return null;
-  const win = { ...xfBox(doc, "photo", win0), kind: win0.kind };
-  const ox = Math.max(0, Math.min(box.x + box.w, win.x + win.w) - Math.max(box.x, win.x));
-  const oy = Math.max(0, Math.min(box.y + box.h, win.y + win.h) - Math.max(box.y, win.y));
-  const frac = Math.min(1, (ox * oy) / Math.max(1, box.w * box.h));
-  if (frac <= 0) return null;
-  return { frac, lum: windowContentLum(doc, win, box), win0 };
-}
-
 // Luminance of the window's content under `sub` — sub and the window rect in
 // the same coordinate space. Uploads have no luminance grid: a safe mid guess.
 function windowContentLum(
@@ -575,69 +642,6 @@ function windowContentLum(
   if (win.kind === "fill" || (!doc.comp.upload && !p)) return hexLum(docAccent(doc, doc.comp.panelAccent));
   if (!doc.comp.upload && p) return photoRegionLum(p, sub, win);
   return 0.5;
-}
-
-// Contrast guardrail for marks that sit directly on the art (the net
-// signature, the bare-text "line" chips): estimate the luminance under the
-// element's box — ground, then the veiled background texture, then any
-// photo/panel window covering it — and pick near-white or near-ink. Members
-// never choose this; it just keeps the mark legible by construction.
-function contrastInkAt(
-  doc: Doc,
-  box: { x: number; y: number; w: number; h: number },
-  W: number,
-  H: number,
-  heroBottom: number
-): string {
-  let L = baseLumAt(doc, box, W, H);
-  const wi = windowLumAt(doc, box, W, heroBottom);
-  if (wi) L = wi.lum * wi.frac + L * (1 - wi.frac); // area-weighted across surfaces
-  return L < 0.5 ? C_LIGHT : C_DARK;
-}
-
-// The tight box the "line" chip row actually occupies — real glyph widths,
-// same layout math as lineChipsSvg. Contrast wants the row's true footprint,
-// not a chars×size guess spanning half the canvas.
-function lineRowBox(
-  dateText: string,
-  timeText: string,
-  size: number,
-  anchor: number,
-  cy: number,
-  align: "start" | "end"
-): { x: number; y: number; w: number; h: number } {
-  const fam = fontFamilyCss("Figtree");
-  const dateW = dateText.trim() ? measureTextWidth(dateText, fam, 600, size) : 0;
-  const timeW = timeText.trim() ? measureTextWidth(timeText, fam, 600, size) : 0;
-  const gap = dateW && timeW ? size * 1.6 : 0;
-  const w = Math.max(1, dateW + timeW + gap);
-  const h = size * 1.75;
-  return { x: align === "end" ? anchor - w : anchor, y: cy - h / 2, w, h };
-}
-
-// Contrast for the bare-text chip row: true pixels sampled at a few points
-// along the row's real footprint (pushed through its transform), analytic
-// estimate while the grid warms.
-function rowContrastInk(
-  doc: Doc,
-  box: { x: number; y: number; w: number; h: number },
-  W: number,
-  H: number,
-  heroBottom: number
-): string {
-  const sample = artLumSampler(doc);
-  if (sample) {
-    const t = doc.comp.xf?.date;
-    const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
-    const n = 5;
-    let L = 0;
-    for (let i = 0; i < n; i++) {
-      const p = xfPt(t, cx, cy, box.x + (box.w * (i + 0.5)) / n, cy);
-      L += sample(p.x, p.y, (box.h / 2) * (t?.s ?? 1));
-    }
-    return L / n < 0.5 ? C_LIGHT : C_DARK;
-  }
-  return contrastInkAt(doc, xfBox(doc, "date", box), W, H, heroBottom);
 }
 
 // The forward xfWrap transform (and its inverse) as SVG transform lists —
@@ -670,11 +674,14 @@ let artLumPending: string | null = null;
 // dragging the sig must not invalidate the grid it samples against.
 function artKey(doc: Doc): string {
   const c = doc.comp;
+  // texts render beneath the words layer (like the old single prose card
+  // did) — their content, frame, and own transform all affect the raster.
+  const textsKey = c.texts.map((tb) => [tb.text, tb.frame, tb.frameSeed, c.xf?.[textXfKey(tb.id)]]);
   return JSON.stringify([
-    doc.template, doc.register, doc.ground, doc.season, doc.fields.prose,
+    doc.template, doc.register, doc.ground, doc.season, textsKey,
     c.layout, c.words, c.arrange, c.frame, c.frameSeed, c.photo,
     c.upload?.length ?? 0, c.bg, c.bgFade, c.panelAccent,
-    c.xf?.photo, c.xf?.motif, c.xf?.prose, doc.motif,
+    c.xf?.photo, c.xf?.motif, doc.motif,
   ]);
 }
 
@@ -765,30 +772,35 @@ function frameHitTester(
   }
 }
 
-// The signature with SPLIT contrast: when the mark straddles the photo/panel
-// window's edge (dark photo over a light ground, say), one ink can't work on
-// both surfaces — so the mark is drawn twice, the base-ink copy everywhere
-// and the window-ink copy clipped to the window's actual frame shape, so
-// each letter flips color exactly at the boundary it crosses.
+// SPLIT contrast for any word-layer mark that sits directly on the art: when
+// it straddles the photo/panel window's edge (dark photo over a light
+// ground, say), one ink can't work on both surfaces — so the mark is drawn
+// twice, the base-ink copy everywhere and the window-ink copy clipped to the
+// window's actual frame shape, so it flips color exactly at the boundary it
+// crosses. Shared by the signature and the "line" chip row.
+//
 // Both the straddle test and the ink choices come from the mark's ACTUAL
-// letters (netInk discs pushed through its transform), never its bounding
-// box — the cluster fills a fraction of the box, so a box that grazes a dark
-// photo says nothing about the pixels the letters really sit on.
-function splitSigSvg(
+// ink-bearing points (`discsWorld`, already pushed through the element's own
+// transform — sig letters via netInk, chip text via sample points along its
+// glyph runs), never its bounding box — a box that merely grazes a dark
+// photo says nothing about the pixels the mark's own ink really sits on.
+// `render(ink)` draws the mark's full content at its untransformed layout
+// position (the same coordinate space `cx`/`cy` — the transform pivot —
+// live in); this function applies the member's own `key` transform via
+// xfWrap exactly once, around whichever of the single- or dual-ink content
+// it ends up needing.
+function splitInkSvg(
   doc: Doc,
-  box: { x: number; y: number; w: number; h: number },
+  key: XfKey,
+  cx: number,
+  cy: number,
+  discsWorld: { x: number; y: number; r: number }[],
+  render: (ink: string) => string,
   W: number,
   H: number,
   heroBottom: number
 ): string {
-  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
-  const sig = (ink: string) => signatureSvg(doc, box.x, box.y, box.w, box.h, ink);
-  const st = doc.comp.xf?.sig;
-  const discs = netInk({ w: box.w, h: box.h, p: sigEngineParams(doc), seed: doc.comp.sig.seed })
-    .map((d: { x: number; y: number; r: number }) => ({
-      ...xfPt(st, cx, cy, box.x + d.x, box.y + d.y),
-      r: d.r * (st?.s ?? 1),
-    }));
+  const st = doc.comp.xf?.[key];
   const w0 = layoutWindow(doc, W, heroBottom);
   const pt = doc.comp.xf?.photo;
   const wcx = w0 ? w0.x + w0.w / 2 : 0, wcy = w0 ? w0.y + w0.h / 2 : 0;
@@ -798,8 +810,8 @@ function splitSigSvg(
   const hit = w0 && fp ? frameHitTester(fp, w0) : null;
   const sample = artLumSampler(doc); // true pixels, when the grid is warm
   let inLum = 0, inN = 0, outLum = 0, outN = 0;
-  for (const d of discs) {
-    // pull the letter back into the window's own space to ask "over it?"
+  for (const d of discsWorld) {
+    // pull the point back into the window's own space to ask "over it?"
     const q = w0 ? xfPtInv(pt, wcx, wcy, d.x, d.y) : { x: 0, y: 0 };
     const inside =
       !!w0 &&
@@ -818,27 +830,130 @@ function splitSigSvg(
   const inkIn = inN ? (inLum / inN < 0.5 ? C_LIGHT : C_DARK) : null;
   const inkOut = outN ? (outLum / outN < 0.5 ? C_LIGHT : C_DARK) : null;
   if (!w0 || !fp || !inkIn || !inkOut || inkIn === inkOut)
-    return xfWrap(doc, "sig", cx, cy, sig(inkIn ?? inkOut ?? docGround(doc).ink));
+    return xfWrap(doc, key, cx, cy, render(inkIn ?? inkOut ?? docGround(doc).ink));
   const photoT = xfAttr(pt, wcx, wcy);
-  const invSig = xfInverseAttr(st, cx, cy);
-  const clipT = [invSig, photoT, `translate(${w0.x.toFixed(1)} ${w0.y.toFixed(1)})`, fp.transform ?? ""]
+  const invT = xfInverseAttr(st, cx, cy);
+  const clipT = [invT, photoT, `translate(${w0.x.toFixed(1)} ${w0.y.toFixed(1)})`, fp.transform ?? ""]
     .filter(Boolean)
     .join(" ");
   const cid = `split${uid++}`;
   return xfWrap(
     doc,
-    "sig",
+    key,
     cx,
     cy,
-    `${sig(inkOut)}<clipPath id="${cid}" clipPathUnits="userSpaceOnUse"><path d="${fp.d}" transform="${clipT}"/></clipPath><g clip-path="url(#${cid})">${sig(inkIn)}</g>`
+    `${render(inkOut)}<clipPath id="${cid}" clipPathUnits="userSpaceOnUse"><path d="${fp.d}" transform="${clipT}"/></clipPath><g clip-path="url(#${cid})">${render(inkIn)}</g>`
   );
+}
+
+// The signature with split contrast — see splitInkSvg above. The straddle
+// test and ink choices come from the mark's ACTUAL letters (netInk discs
+// pushed through its transform), never its bounding box.
+function splitSigSvg(
+  doc: Doc,
+  box: { x: number; y: number; w: number; h: number },
+  W: number,
+  H: number,
+  heroBottom: number
+): string {
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  const st = doc.comp.xf?.sig;
+  const discs = netInk({ w: box.w, h: box.h, p: sigEngineParams(doc), seed: doc.comp.sig.seed })
+    .map((d: { x: number; y: number; r: number }) => ({
+      ...xfPt(st, cx, cy, box.x + d.x, box.y + d.y),
+      r: d.r * (st?.s ?? 1),
+    }));
+  return splitInkSvg(doc, "sig", cx, cy, discs, (ink) => signatureSvg(doc, box.x, box.y, box.w, box.h, ink), W, H, heroBottom);
 }
 
 // The effective engine params the signature renders with — shared with
 // netExtent so balance math sees exactly the mark that gets drawn.
 function sigEngineParams(doc: Doc): Record<string, number> {
   const sp = doc.comp.sig.params;
-  return { ...sp, tiles: 1, size: (sp.size ?? 1) * 2.2, weight: (sp.weight ?? 1) * 3 };
+  // even: 1 — the signature reads as a wordmark, so its four letters stay
+  // the same size (unlike the general network motif's sketch-page jitter).
+  return { ...sp, tiles: 1, size: (sp.size ?? 1) * 2.2, weight: (sp.weight ?? 1) * 3, even: 1 };
+}
+
+// The title over full-bleed art (corners/stack): a framedPlate sized to the
+// (already width-fitted) title text, left edge pinned at `leftX`, bottom edge
+// pinned at `bottom` (clamped so it can never climb off the canvas top when a
+// tall designer-shape plate outgrows the old fixed-height card).
+function titleWordSvg(
+  doc: Doc,
+  title: string,
+  size: number,
+  textW: number,
+  ink: string,
+  ground: string,
+  leftX: number,
+  bottom: number,
+  m: number
+): string {
+  const contentW = textW + titlePlatePadX(size) * 2;
+  const contentH = titlePlateAboveBaseline(size) + titlePlateBelowBaseline(size);
+  const plate = framedPlate(doc.comp.titleFrame, doc.comp.titleFrameSeed, contentW, contentH, ink, ground, 2, (cx, cy) =>
+    `<text x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="${ink}"
+      font-family="${fontFamilyCss(heading().name)}" font-size="${size.toFixed(1)}" font-weight="${heading().weight}">${esc(title)}</text>`
+  );
+  const top = Math.max(m * 0.3, bottom - plate.h);
+  return xfWrap(doc, "title", leftX + plate.w / 2, top + plate.h / 2,
+    `<g transform="translate(${leftX.toFixed(1)} ${top.toFixed(1)})">${plate.svg}</g>`);
+}
+
+// A member text box: wrapped, centered lines (horizontally per line, the
+// whole block vertically) inside a framedPlate sized to that wrapped text.
+// Default position cascades a little per index so several fresh boxes don't
+// land exactly on top of each other before a member drags them into place.
+function textBoxSvg(
+  doc: Doc,
+  tb: TextBoxState,
+  idx: number,
+  ink: string,
+  ground: string,
+  c: { detailSize: number },
+  words: "band" | "corners" | "stack",
+  H: number,
+  proseDefault: { x: number; y: number; w: number }
+): string {
+  const text = tb.text.trim();
+  if (!text) return "";
+  const size = c.detailSize;
+  const fam = fontFamilyCss(bodyFace().name);
+  const weight = bodyFace().weight;
+  const perLine = Math.max(8, Math.floor(proseDefault.w / (size * 0.5)));
+  const lines: string[] = [];
+  for (const para of text.split("\n")) {
+    let line = "";
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const cand = line ? `${line} ${word}` : word;
+      if (cand.length > perLine && line) {
+        lines.push(line);
+        line = word;
+      } else line = cand;
+    }
+    lines.push(line);
+  }
+  const shown = lines.slice(0, 10);
+  const textW = Math.max(20, ...shown.map((l) => measureTextWidth(l, fam, weight, size)));
+  const lh = size * 1.5;
+  const textH = shown.length * lh;
+  const pad = size * 1.15;
+  const plate = framedPlate(tb.frame, tb.frameSeed, textW + pad * 2, textH + pad * 2, ink, ground, 2, (cx, cy) => {
+    const top = cy - textH / 2;
+    return shown
+      .map(
+        (l, i) =>
+          `<text x="${cx.toFixed(1)}" y="${(top + lh * (i + 0.5)).toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="${ink}"
+            font-family="${fam}" font-size="${size}" font-weight="${weight}">${esc(l)}</text>`
+      )
+      .join("");
+  });
+  const cascade = idx * size * 0.9;
+  const px = proseDefault.x + cascade;
+  const py = (words === "band" ? proseDefault.y - plate.h : (H - plate.h) / 2) + cascade;
+  return xfWrap(doc, textXfKey(tb.id), px + plate.w / 2, py + plate.h / 2,
+    `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})">${plate.svg}</g>`);
 }
 
 // artOnly: just the layers beneath the words — what ensureArtLum rasterizes
@@ -867,68 +982,54 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
   let heroBottom: number;
   let proseDefault: { x: number; y: number; w: number };
 
+  // Corners/stack spawn their signature noticeably bigger by default — it's
+  // the whole top-left corner's anchor over full-bleed art, not a corner
+  // accent next to a band of text — while staying fully inside the art
+  // window (same top-left margins; the box just grows toward the center).
+  const sigWBig = sigW * 1.4, sigHBig = sigH * 1.4;
+
   if (comp.words === "corners") {
     const hb = H - m * 0.35;
     // fully inside the art window, not straddling its edge — a straddled mark
     // can't win the contrast fight on both surfaces at once
     const sigX = m * 1.1, sigY = m * 1.2;
-    wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
+    if (comp.sigOn) wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigWBig, h: sigHBig }, W, H, hb);
     const chipH = c.chipSize * 1.75;
     const chipCy = H - m * 0.8 - chipH / 2;
-    const rowInk =
-      chipStyle === "line"
-        ? rowContrastInk(doc, lineRowBox(dateText, timeText, c.chipSize, W - m, chipCy, "end"), W, H, hb)
-        : ink;
-    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
+    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, chipCy, c.chipSize, comp.frameSeed + 1, "end", W, H, hb);
     wordsSvg += row.svg;
     if (title) {
       const size0 = c.titleSize * 1.3;
       const edgeMargin = m * 0.5; // clearance from the plate to the canvas edge
-      const padXReserve = titlePlatePadX(size0);
-      const maxW = W - edgeMargin * 2 - padXReserve * 2;
+      const maxW = W - edgeMargin * 2 - titlePlatePadX(size0) * 2;
       const { size, w } = fitTitle(title, size0, maxW);
-      const titleX = edgeMargin + padXReserve;
       // over full-bleed art, so the title rides on a contrast plate — sized
       // to clear the chip row beneath it, never just the bare 25%-up default
-      const belowExtent = titlePlateBelowBaseline(size);
       const chipRowTop = chipCy - chipH / 2;
-      const desiredBaseline = H - H * 0.25 + size * 0.34; // 25% up from the bottom
-      const baseline = Math.min(desiredBaseline, chipRowTop - m * 0.55 - belowExtent);
-      const plateTop = baseline - titlePlateAboveBaseline(size);
-      const plateBottom = baseline + belowExtent;
-      wordsSvg += xfWrap(doc, "title", titleX + w / 2, (plateTop + plateBottom) / 2,
-        titlePlateSvg(title, titleX, baseline, "start", size, w, ink, g.hex));
+      const desiredBottom = H - H * 0.25 + size * 0.34 + titlePlateBelowBaseline(size); // 25% up from the bottom
+      const maxBottom = chipRowTop - m * 0.55;
+      wordsSvg += titleWordSvg(doc, title, size, w, ink, g.hex, edgeMargin, Math.min(desiredBottom, maxBottom), m);
     }
     heroBottom = H - m * 0.35;
     proseDefault = { x: (W - W * 0.6) / 2, y: 0, w: W * 0.6 };
   } else if (comp.words === "stack") {
     const hb = H - m * 0.35;
     const sigX = m * 1.1, sigY = m * 1.2;
-    wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
+    if (comp.sigOn) wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigWBig, h: sigHBig }, W, H, hb);
     const chipH = c.chipSize * 1.75;
     const chipCy = H - m * 0.55 - chipH / 2;
-    const rowInk =
-      chipStyle === "line"
-        ? rowContrastInk(doc, lineRowBox(dateText, timeText, c.chipSize, m * 0.6, chipCy, "start"), W, H, hb)
-        : ink;
-    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, m * 0.6, chipCy, c.chipSize, comp.frameSeed + 1, rowInk, "start");
+    const row = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, m * 0.6, chipCy, c.chipSize, comp.frameSeed + 1, "start", W, H, hb);
     wordsSvg += row.svg;
     if (title) {
       const size0 = c.titleSize * 1.4;
       const edgeMargin = m * 0.5; // clearance from the plate to the canvas edge
-      const padXReserve = titlePlatePadX(size0);
-      const maxW = W - edgeMargin * 2 - padXReserve * 2;
+      const maxW = W - edgeMargin * 2 - titlePlatePadX(size0) * 2;
       const { size, w } = fitTitle(title, size0, maxW);
-      const titleX = edgeMargin + padXReserve;
       // over full-bleed art, so the title rides on a contrast plate — placed
       // so the PLATE (not just the bare baseline) keeps its gap above the chips
-      const belowExtent = titlePlateBelowBaseline(size);
       const chipRowTop = chipCy - chipH / 2;
-      const baseline = chipRowTop - m * 0.55 - belowExtent;
-      const plateTop = baseline - titlePlateAboveBaseline(size);
-      const plateBottom = baseline + belowExtent;
-      wordsSvg += xfWrap(doc, "title", titleX + w / 2, (plateTop + plateBottom) / 2,
-        titlePlateSvg(title, titleX, baseline, "start", size, w, ink, g.hex));
+      const plateBottom = chipRowTop - m * 0.55;
+      wordsSvg += titleWordSvg(doc, title, size, w, ink, g.hex, edgeMargin, plateBottom, m);
     }
     heroBottom = H - m * 0.35;
     proseDefault = { x: (W - W * 0.6) / 2, y: 0, w: W * 0.6 };
@@ -939,12 +1040,8 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
     const bandTop = rowCy - bandH / 2;
     const hb = H - m * 0.8 - bandH - m * 0.45;
     const sigX = m * 0.55, sigY = rowCy - sigH / 2;
-    wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
-    const rowInk =
-      chipStyle === "line"
-        ? rowContrastInk(doc, lineRowBox(dateText, timeText, c.chipSize, W - m, rowCy, "end"), W, H, hb)
-        : ink;
-    const row0 = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, rowInk, "end");
+    if (comp.sigOn) wordsSvg += splitSigSvg(doc, { x: sigX, y: sigY, w: sigW, h: sigH }, W, H, hb);
+    const row0 = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, rowCy, c.chipSize, comp.frameSeed + 1, "end", W, H, hb);
     let rowOut = row0;
     let titleOut = "";
     if (title) {
@@ -961,52 +1058,20 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
       titleOut = xfWrap(doc, "title", cxT, rowCy, titleTextSvg(title, cxT, baseline, "middle", size, ink));
       // squiggle chips share the title's baseline; their pills hang below it
       if (chipStyle === "line" && row0.hasAny)
-        rowOut = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, baseline + c.chipSize * 0.35, c.chipSize, comp.frameSeed + 1, rowInk, "end");
+        rowOut = chipsRow(doc, dateText, timeText, dateAccent, timeAccent, chipStyle, W - m, baseline + c.chipSize * 0.35, c.chipSize, comp.frameSeed + 1, "end", W, H, hb);
     }
     wordsSvg += rowOut.svg + titleOut;
     heroBottom = H - m * 0.8 - bandH - m * 0.45;
     proseDefault = { x: m, y: bandTop - m * 0.45, w: W - m * 2 };
   }
 
-  // Prose card — multi-line body copy in its own frame. It floats at a
-  // sensible default position and does not shrink the hero/motif area; the
-  // transform tool moves it from there like any other element.
-  const prose = (doc.fields.prose ?? "").trim();
-  let proseSvgOut = "";
-  if (prose) {
-    const pad = c.detailSize * 1.15;
-    const pw = proseDefault.w;
-    const perLine = Math.max(8, Math.floor((pw - pad * 2) / (c.detailSize * 0.5)));
-    const lines: string[] = [];
-    for (const para of prose.split("\n")) {
-      let line = "";
-      for (const word of para.split(/\s+/).filter(Boolean)) {
-        const cand = line ? `${line} ${word}` : word;
-        if (cand.length > perLine && line) {
-          lines.push(line);
-          line = word;
-        } else line = cand;
-      }
-      lines.push(line);
-    }
-    const shown = lines.slice(0, 10);
-    const lh = c.detailSize * 1.5;
-    const ph = pad * 2 + shown.length * lh;
-    const py = comp.words === "band" ? proseDefault.y - ph : (H - ph) / 2;
-    const px = proseDefault.x;
-    // designer shapes keep their own aspect — the card needs a stretchy frame
-    const cardFrame = comp.frame === "blob" || comp.frame === "drape" ? "wobble" : comp.frame;
-    const fp = framePath(cardFrame, comp.frameSeed + 9, pw, ph);
-    const tspans = shown
-      .map((l, i) => `<tspan x="${pad}" dy="${i === 0 ? 0 : lh}">${esc(l)}</tspan>`)
-      .join("");
-    const proseSvg = `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})">
-      <path d="${fp.d}"${fp.transform ? ` transform="${fp.transform}"` : ""} fill="${g.hex}" stroke="${ink}" stroke-width="2"/>
-      <text x="${pad}" y="${pad + c.detailSize * 0.85}" fill="${ink}"
-        font-family="${fontFamilyCss(bodyFace().name)}" font-size="${c.detailSize}"
-        font-weight="${bodyFace().weight}">${tspans}</text></g>`;
-    proseSvgOut = xfWrap(doc, "prose", px + pw / 2, py + ph / 2, proseSvg);
-  }
+  // Text boxes — member words in their own framed cards. Each floats at a
+  // sensible default position (a small cascade so several fresh boxes aren't
+  // stacked exactly on each other) and does not shrink the hero/motif area;
+  // the transform tool moves each independently from there.
+  const textsSvgOut = doc.comp.texts
+    .map((tb, i) => textBoxSvg(doc, tb, i, ink, g.hex, c, comp.words, H, proseDefault))
+    .join("");
 
   const heroTop = m;
 
@@ -1014,7 +1079,7 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
     const winX = m * 0.7, winY = heroTop, winW = W - m * 1.4, winH = heroBottom - heroTop;
     const win = xfWrap(doc, "photo", winX + winW / 2, winY + winH / 2,
       frameWindow(doc, winX, winY, winW, winH, comp.layout === "panel" ? "fill" : "photo"));
-    return bg + win + proseSvgOut + (artOnly ? "" : wordsSvg);
+    return bg + win + textsSvgOut + (artOnly ? "" : wordsSvg);
   }
 
   const mp = m * 0.45; // motif padding off the canvas edge
@@ -1023,7 +1088,7 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
     // the motif runs the frame, padded off the edges
     const b = { x: mp, y: mp, w: W - mp * 2, h: heroBottom - mp * 2 };
     const motifLayer = xfWrap(doc, "motif", b.x + b.w / 2, b.y + b.h / 2, motifWindowSvg(doc, b));
-    return bg + motifLayer + proseSvgOut + (artOnly ? "" : wordsSvg);
+    return bg + motifLayer + textsSvgOut + (artOnly ? "" : wordsSvg);
   }
 
   // collage & backdrop: a bounded motif window and a framed photo, both
@@ -1033,7 +1098,11 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
   const { motif: mb, photo: pb } = arrangeBoxes(comp.arrange, comp.frameSeed, area.x0, area.y0, area.x1, area.y1);
   const motifLayer = xfWrap(doc, "motif", mb.x + mb.w / 2, mb.y + mb.h / 2, motifWindowSvg(doc, mb));
   const photoLayer = xfWrap(doc, "photo", pb.x + pb.w / 2, pb.y + pb.h / 2, frameWindow(doc, pb.x, pb.y, pb.w, pb.h, "photo"));
-  return bg + motifLayer + photoLayer + proseSvgOut + (artOnly ? "" : wordsSvg);
+  // the sculpt cutout is a hero object, not backdrop texture — it must always
+  // read as sitting ON the photo, never tucked behind it
+  const sculptOnTop = doc.motif?.engine === "sculpt";
+  const layered = sculptOnTop ? photoLayer + motifLayer : motifLayer + photoLayer;
+  return bg + layered + textsSvgOut + (artOnly ? "" : wordsSvg);
 }
 
 // --- diagram kit -------------------------------------------------------------

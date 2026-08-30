@@ -17,11 +17,12 @@ import {
 import { loadFonts } from "./brand/fonts";
 import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById } from "./engines/index";
 import { loadCutouts } from "./cutouts/index";
-import { FRAMES } from "./frames/index";
+import { FRAMES, PLATE_FRAMES } from "./frames/index";
 import { MARKS, loadMarks } from "./marks/index";
 import { PHOTOS, loadPhotos, readUpload } from "./photos/index";
 import { TEMPLATES } from "./templates/index";
 import { ensureArtLum, renderDoc } from "./render";
+import { fetchGalleryMerged, saveGalleryItem, removeLocalGalleryItem, type MergedGalleryItem } from "./gallery/index";
 import {
   ARRANGEMENTS,
   BG_FADE,
@@ -32,14 +33,14 @@ import {
   docGround,
   docTemplate,
   encodeDoc,
-  loadGallery,
   newDoc,
-  removeFromGallery,
+  newTextBoxId,
   sanitize,
-  saveToGallery,
   shuffleComp,
+  textXfKey,
   type ChipStyle,
   type Doc,
+  type TextBoxState,
   type WordsLayout,
   type XfKey,
   type XfState,
@@ -67,6 +68,7 @@ const rightPanel = $("#rightPanel");
 function renderCanvas() {
   canvasWrap.innerHTML = renderDoc(doc);
   attachXfInteractivity();
+  noteHistory();
   // warm the true-pixel luminance grid for contrast; when it lands (once per
   // art change) re-render so sig/chip inks read the pixels actually beneath
   ensureArtLum(doc, renderCanvas);
@@ -107,6 +109,9 @@ function accentChips(
 // --- left panel: template, register, season ---------------------------------
 
 function buildLeft() {
+  // same scrollTop-preservation concern as buildRight below — leftPanel is
+  // itself the scrolling element.
+  const scrollY = leftPanel.scrollTop;
   leftPanel.innerHTML = "";
   leftPanel.appendChild(h(`<h3 class="panel-title">Template</h3>`));
   for (const t of TEMPLATES) {
@@ -167,6 +172,7 @@ function buildLeft() {
       h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
     );
   }
+  leftPanel.scrollTop = scrollY;
 }
 
 // --- right panel: contextual controls ---------------------------------------
@@ -176,7 +182,6 @@ function buildLeft() {
 function compControls(into: HTMLElement) {
   const t = docTemplate(doc);
   if (!t.composed) return;
-  into.appendChild(h(`<h3 class="panel-title">Composition</h3>`));
 
   const shuffle = h(`<button class="act" style="margin-bottom:10px">🎲 Shuffle composition</button>`);
   shuffle.onclick = () => {
@@ -249,59 +254,63 @@ function compControls(into: HTMLElement) {
   }
 }
 
-function photoControls(into: HTMLElement) {
+// True when the current layout actually shows a framed photo window at all
+// (panel/motif layouts don't) — both photo sections key off this.
+function hasPhotoWindow(): boolean {
+  const t = docTemplate(doc);
+  return !!t.composed && doc.comp.layout !== "panel" && doc.comp.layout !== "motif";
+}
+
+function photoLibraryControls(into: HTMLElement) {
+  if (!hasPhotoWindow()) return;
+  const grid = h(`<div class="photo-grid"></div>`);
+  for (const p of PHOTOS) {
+    const on = !doc.comp.upload && doc.comp.photo === p.id;
+    const cell = h(
+      `<button class="photo-cell ${on ? "active" : ""}" title="${p.name}">
+        <img src="${p.src}" alt="${p.name}"></button>`
+    );
+    cell.onclick = () => {
+      delete doc.comp.upload;
+      doc.comp.photo = p.id;
+      buildRight();
+      renderCanvas();
+    };
+    grid.appendChild(cell);
+  }
+  into.appendChild(grid);
+
+  const row = h(`<div class="row" style="margin:8px 0 14px"></div>`);
+  const up = h(`<button class="mini" style="flex:1">⤒ Upload photo${doc.comp.upload ? " ✓" : ""}</button>`);
+  const file = h(`<input type="file" accept="image/*" style="display:none">`) as HTMLInputElement;
+  up.onclick = () => file.click();
+  file.onchange = async () => {
+    if (!file.files?.[0]) return;
+    const p = await readUpload(file.files[0]);
+    doc.comp.upload = p.src;
+    buildRight();
+    renderCanvas();
+  };
+  const none = h(`<button class="mini">No photo</button>`);
+  none.onclick = () => {
+    delete doc.comp.upload;
+    doc.comp.photo = "";
+    buildRight();
+    renderCanvas();
+  };
+  row.append(up, file, none);
+  into.appendChild(row);
+  into.appendChild(
+    h(`<div class="note">House photos are shot inside the Fold itself — its windows,
+      brick, and concrete. Uploads stay in this doc. Either way the frame and
+      palette keep it ours.</div>`)
+  );
+}
+
+function bgTextureControls(into: HTMLElement) {
   const t = docTemplate(doc);
   if (!t.composed) return;
-  const framed = doc.comp.layout !== "panel" && doc.comp.layout !== "motif";
-
-  if (framed) {
-    into.appendChild(h(`<h3 class="panel-title">Photo</h3>`));
-    const grid = h(`<div class="photo-grid"></div>`);
-    for (const p of PHOTOS) {
-      const on = !doc.comp.upload && doc.comp.photo === p.id;
-      const cell = h(
-        `<button class="photo-cell ${on ? "active" : ""}" title="${p.name}">
-          <img src="${p.src}" alt="${p.name}"></button>`
-      );
-      cell.onclick = () => {
-        delete doc.comp.upload;
-        doc.comp.photo = p.id;
-        buildRight();
-        renderCanvas();
-      };
-      grid.appendChild(cell);
-    }
-    into.appendChild(grid);
-
-    const row = h(`<div class="row" style="margin:8px 0 14px"></div>`);
-    const up = h(`<button class="mini" style="flex:1">⤒ Upload photo${doc.comp.upload ? " ✓" : ""}</button>`);
-    const file = h(`<input type="file" accept="image/*" style="display:none">`) as HTMLInputElement;
-    up.onclick = () => file.click();
-    file.onchange = async () => {
-      if (!file.files?.[0]) return;
-      const p = await readUpload(file.files[0]);
-      doc.comp.upload = p.src;
-      buildRight();
-      renderCanvas();
-    };
-    const none = h(`<button class="mini">No photo</button>`);
-    none.onclick = () => {
-      delete doc.comp.upload;
-      doc.comp.photo = "";
-      buildRight();
-      renderCanvas();
-    };
-    row.append(up, file, none);
-    into.appendChild(row);
-    into.appendChild(
-      h(`<div class="note">House photos are shot inside the Fold itself — its windows,
-        brick, and concrete. Uploads stay in this doc. Either way the frame and
-        palette keep it ours.</div>`)
-    );
-  }
-
   // Background texture — any house photo can wash the whole ground.
-  into.appendChild(h(`<h3 class="panel-title">Background texture</h3>`));
   const bgGrid = h(`<div class="photo-grid"></div>`);
   const noneCell = h(
     `<button class="photo-cell bg-none ${doc.comp.bg === "" ? "active" : ""}" title="None">✕</button>`
@@ -345,11 +354,30 @@ function photoControls(into: HTMLElement) {
 // tunable: the net is the logo.
 function sigControls(into: HTMLElement) {
   if (!docTemplate(doc).composed) return;
-  into.appendChild(h(`<h3 class="panel-title">Signature · F·O·L·D net</h3>`));
   into.appendChild(
     h(`<div class="note">The name held together — a membrane, a web, or ridge lines.
       Every piece carries one; reroll until it feels right.</div>`)
   );
+  const tog = h(
+    `<div class="seg" style="margin-bottom:10px">
+      <button class="${doc.comp.sigOn ? "active" : ""}">On</button>
+      <button class="${!doc.comp.sigOn ? "active" : ""}">Off</button>
+    </div>`
+  );
+  const [sigOnBtn, sigOffBtn] = tog.querySelectorAll("button");
+  sigOnBtn.onclick = () => {
+    doc.comp.sigOn = true;
+    buildRight();
+    renderCanvas();
+  };
+  sigOffBtn.onclick = () => {
+    doc.comp.sigOn = false;
+    if (selected === "sig") deselect();
+    buildRight();
+    renderCanvas();
+  };
+  into.appendChild(tog);
+  if (!doc.comp.sigOn) return;
   for (const p of SIG_PARAMS) {
     const f = h(`<div class="field"><label>${p.label}</label></div>`);
     const r = h(
@@ -372,7 +400,6 @@ function sigControls(into: HTMLElement) {
 
 function composedWordControls(into: HTMLElement) {
   const t = docTemplate(doc);
-  into.appendChild(h(`<h3 class="panel-title">Words</h3>`));
 
   const wordsDefs: { key: WordsLayout; label: string }[] = [
     { key: "band", label: "Band" },
@@ -412,9 +439,31 @@ function composedWordControls(into: HTMLElement) {
   cf.appendChild(cseg);
   into.appendChild(cf);
 
+  // the title's contrast plate can take any frame shape — same set as
+  // photo/motif/text-box frames (a plate only actually shows over full-bleed
+  // art in the "corners"/"stack" words layouts; harmless to set otherwise)
+  const tf = h(`<div class="field"><label>Title frame</label></div>`);
+  const tfSeg = h(`<div class="seg wrap"></div>`);
+  for (const f of PLATE_FRAMES) {
+    const b = h(`<button class="${doc.comp.titleFrame === f.id ? "active" : ""}">${f.label}</button>`);
+    b.onclick = () => {
+      doc.comp.titleFrame = f.id;
+      buildRight();
+      renderCanvas();
+    };
+    tfSeg.appendChild(b);
+  }
+  tf.appendChild(tfSeg);
+  const tfReroll = h(`<button class="mini" style="margin-top:6px">↻ Reroll title frame</button>`);
+  tfReroll.onclick = () => {
+    doc.comp.titleFrameSeed = Math.floor(Math.random() * 100000);
+    renderCanvas();
+  };
+  tf.appendChild(tfReroll);
+  into.appendChild(tf);
+
   const fields: { id: string; label: string; chip?: 0 | 1; multi?: boolean }[] = [
     { id: "title", label: "Title" },
-    { id: "prose", label: "Prose (optional — gets its own framed card)", multi: true },
     { id: "date", label: "Date chip", chip: 0 },
     { id: "time", label: "Time chip", chip: 1 },
   ];
@@ -447,7 +496,6 @@ function fieldControls(into: HTMLElement) {
   const t = docTemplate(doc);
   if (t.composed) return composedWordControls(into);
   if (!t.zones.length) return;
-  into.appendChild(h(`<h3 class="panel-title">Words</h3>`));
   for (const z of t.zones) {
     const f = h(`<div class="field"><label>${z.label}</label></div>`);
     const multi = (z.lines ?? 3) > 1 && z.role !== "display";
@@ -474,13 +522,74 @@ function fieldControls(into: HTMLElement) {
   }
 }
 
+// Text boxes — each a member string in its own framed card, sized to its
+// wrapped text, selectable/movable/rotatable/resizable like any other element.
+function textBoxesControls(into: HTMLElement) {
+  const t = docTemplate(doc);
+  if (!t.composed) return;
+  for (const tb of doc.comp.texts) {
+    const card = h(
+      `<div class="field" style="border:1px solid var(--rule);border-radius:10px;padding:10px 10px 4px"></div>`
+    );
+    const ta = h(
+      `<textarea rows="3" placeholder="Say something…">${tb.text.replaceAll("<", "&lt;")}</textarea>`
+    ) as HTMLTextAreaElement;
+    ta.oninput = () => {
+      tb.text = ta.value;
+      renderCanvas();
+    };
+    card.appendChild(ta);
+    const frameRow = h(`<div class="seg wrap" style="margin-top:8px"></div>`);
+    for (const f of PLATE_FRAMES) {
+      const b = h(`<button class="${tb.frame === f.id ? "active" : ""}">${f.label}</button>`);
+      b.onclick = () => {
+        tb.frame = f.id;
+        buildRight();
+        renderCanvas();
+      };
+      frameRow.appendChild(b);
+    }
+    card.appendChild(frameRow);
+    const rowBtns = h(`<div class="row" style="margin:8px 0 10px"></div>`);
+    const reroll = h(`<button class="mini" style="flex:1">↻ Reroll frame</button>`);
+    reroll.onclick = () => {
+      tb.frameSeed = Math.floor(Math.random() * 100000);
+      renderCanvas();
+    };
+    const del = h(`<button class="mini">✕ Delete</button>`);
+    del.onclick = () => {
+      doc.comp.texts = doc.comp.texts.filter((x) => x.id !== tb.id);
+      const xf = { ...(doc.comp.xf ?? {}) };
+      delete xf[textXfKey(tb.id)];
+      doc.comp.xf = xf;
+      if (selected === textXfKey(tb.id)) deselect();
+      buildRight();
+      renderCanvas();
+    };
+    rowBtns.append(reroll, del);
+    card.appendChild(rowBtns);
+    into.appendChild(card);
+  }
+  const add = h(`<button class="act ghost">+ Add text box</button>`);
+  add.onclick = () => {
+    doc.comp.texts.push({
+      id: newTextBoxId(),
+      text: "",
+      frame: PLATE_FRAMES[0].id,
+      frameSeed: Math.floor(Math.random() * 100000),
+    });
+    buildRight();
+    renderCanvas();
+  };
+  into.appendChild(add);
+}
+
 function motifControls(into: HTMLElement) {
   const t = docTemplate(doc);
   const composedMotif =
     t.composed &&
     (doc.comp.layout === "motif" || doc.comp.layout === "backdrop" || doc.comp.layout === "collage");
   if ((!t.motifSlot && !composedMotif) || !doc.motif) return;
-  into.appendChild(h(`<h3 class="panel-title">Motif</h3>`));
   const sel = h(
     `<div class="field"><select>${ENGINES.map(
       (e) => `<option value="${e.id}" ${doc.motif!.engine === e.id ? "selected" : ""}>${e.label}</option>`
@@ -535,7 +644,6 @@ function motifControls(into: HTMLElement) {
 function lineControls(into: HTMLElement) {
   const t = docTemplate(doc);
   if (!t.line) return;
-  into.appendChild(h(`<h3 class="panel-title">The Line</h3>`));
   const tog = h(
     `<div class="seg" style="margin-bottom:10px">
       <button class="${doc.lineOn ? "active" : ""}">On</button>
@@ -654,7 +762,6 @@ function diagramControls(into: HTMLElement) {
 
 function stickerControls(into: HTMLElement) {
   if (docTemplate(doc).kind !== "stickers") return;
-  into.appendChild(h(`<h3 class="panel-title">Marks</h3>`));
   for (const m of MARKS) {
     const on = doc.stickers.ids.includes(m.id);
     const row = h(`<div class="row" style="margin-bottom:8px">
@@ -686,7 +793,6 @@ function stickerControls(into: HTMLElement) {
 }
 
 function exportControls(into: HTMLElement) {
-  into.appendChild(h(`<h3 class="panel-title">Ship it</h3>`));
   const svgB = h(`<button class="act">Export SVG</button>`);
   svgB.onclick = () => exportSvg(doc);
   const pngB = h(`<button class="act ghost">Export PNG</button>`);
@@ -742,7 +848,7 @@ function openSaveModal(saveB: HTMLElement) {
     window.removeEventListener("keydown", onKey);
     overlay.remove();
   }
-  function save() {
+  async function save() {
     const name = nameInput.value.trim() || "Untitled";
     const maker = makerInput.value.trim();
     doc.name = name;
@@ -751,10 +857,12 @@ function openSaveModal(saveB: HTMLElement) {
     } catch {
       /* private mode etc — nothing to remember across saves */
     }
-    saveToGallery(doc, name, maker);
     close();
+    saveB.textContent = "Saving…";
+    await saveGalleryItem(doc, name, maker);
     saveB.textContent = "Saved ✓";
     setTimeout(() => (saveB.textContent = "Save to gallery"), 1400);
+    if ($("#galleryView").classList.contains("active")) buildGallery();
   }
   window.addEventListener("keydown", onKey);
   overlay.addEventListener("pointerdown", (e) => {
@@ -914,6 +1022,13 @@ function buildHandles(g: SVGGElement, key: XfKey) {
 function startDrag(e: PointerEvent, key: XfKey, g: SVGGElement, mode: DragState["mode"]) {
   e.preventDefault();
   e.stopPropagation();
+  // preventDefault above also cancels the browser's normal implicit blur of
+  // whatever field had focus (e.g. a text-box textarea the member was just
+  // typing in) — without this, clicking straight from typing to selecting a
+  // canvas element leaves focus stranded on the old field, and Delete would
+  // still be suppressed as "typing" instead of reaching the newly selected
+  // element. Blur explicitly so intent visibly moves to the canvas.
+  if (isTypingTarget(document.activeElement)) (document.activeElement as HTMLElement).blur();
   const svg = g.ownerSVGElement as unknown as SVGSVGElement;
   const bbox = g.getBBox();
   const cx = bbox.x + bbox.width / 2, cy = bbox.y + bbox.height / 2;
@@ -986,9 +1101,147 @@ function deselect() {
   document.querySelectorAll('#canvasWrap svg .xf-chrome').forEach((c) => c.remove());
 }
 
+function isTypingTarget(el: Element | null): boolean {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || (el as HTMLElement).isContentEditable;
+}
+
+// Delete key on the selected element: each element kind has its own idea of
+// "removed" — a photo clears back to no image, a motif turns fully off, a
+// text box is dropped from comp.texts, title/date/time clear their field,
+// and the signature is hidden (sigControls' On/Off toggle brings it back —
+// the one element kind whose panel would otherwise disappear along with it).
+function deleteSelected() {
+  const key = selected;
+  if (!key) return;
+  if (key.startsWith("text:")) {
+    const id = key.slice("text:".length);
+    doc.comp.texts = doc.comp.texts.filter((tb) => tb.id !== id);
+  } else if (key === "photo") {
+    doc.comp.photo = "";
+    delete doc.comp.upload;
+  } else if (key === "motif") {
+    doc.motif = null;
+  } else if (key === "title" || key === "date" || key === "time") {
+    doc.fields[key] = "";
+  } else if (key === "sig") {
+    doc.comp.sigOn = false;
+  }
+  const xf = { ...(doc.comp.xf ?? {}) };
+  delete xf[key];
+  doc.comp.xf = xf;
+  deselect();
+  buildAll();
+}
+
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") deselect();
+  if (e.key === "Escape") {
+    deselect();
+    return;
+  }
+  const typing = isTypingTarget(document.activeElement);
+  if ((e.key === "Delete" || e.key === "Backspace") && !typing && selected) {
+    e.preventDefault();
+    deleteSelected();
+    return;
+  }
+  // Cmd/Ctrl+Z / Shift+Cmd/Ctrl+Z — suppressed while typing so the browser's
+  // own per-field undo (e.g. inside a textarea) isn't hijacked.
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !typing) {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+  }
 });
+
+// --- undo / redo --------------------------------------------------------------
+// One history stack over the whole doc, keyed off renderCanvas() — almost
+// every mutation in the app funnels through it (directly, or via buildAll()),
+// so it's the single choke point to snapshot from instead of instrumenting
+// every call site. Continuous gestures (a drag, a range slider, typing in a
+// field) coalesce into one entry via noteHistory's "same focused
+// continuous-input element, within the coalesce window" check; the drag tool
+// itself only ever calls renderCanvas() once per gesture (at pointerup), so
+// it coalesces for free.
+const HISTORY_CAP = 100;
+const HISTORY_COALESCE_MS = 1200;
+let historyUndo: string[] = [];
+let historyRedo: string[] = [];
+let historyCurrent: string = JSON.stringify(doc);
+let historyCoalesceEl: Element | null = null;
+let historyCoalesceAt = 0;
+let historySuppressed = false;
+
+function isContinuousInput(el: Element | null): boolean {
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA") return true;
+  if (el.tagName === "INPUT") {
+    const type = (el as HTMLInputElement).type;
+    return type === "range" || type === "text";
+  }
+  return false;
+}
+
+function updateHistoryButtons() {
+  const undoBtn = document.querySelector("#undoBtn") as HTMLButtonElement | null;
+  const redoBtn = document.querySelector("#redoBtn") as HTMLButtonElement | null;
+  if (undoBtn) undoBtn.disabled = historyUndo.length === 0;
+  if (redoBtn) redoBtn.disabled = historyRedo.length === 0;
+}
+
+// Called from renderCanvas(). Records the doc state from BEFORE this render
+// as one undo step, unless: it's a no-op re-render with no actual doc change
+// (e.g. ensureArtLum's async warm-up callback), it's happening while an
+// undo/redo itself is being applied (historySuppressed), or it's a
+// continuation of the same gesture that produced the last entry.
+function noteHistory() {
+  const snap = JSON.stringify(doc);
+  if (snap === historyCurrent) return;
+  if (historySuppressed) {
+    historyCurrent = snap;
+    return;
+  }
+  const active = document.activeElement;
+  const now = performance.now();
+  const continuing =
+    isContinuousInput(active) && active === historyCoalesceEl && now - historyCoalesceAt < HISTORY_COALESCE_MS;
+  if (!continuing) {
+    historyUndo.push(historyCurrent);
+    if (historyUndo.length > HISTORY_CAP) historyUndo.shift();
+    historyRedo = [];
+  }
+  historyCoalesceEl = isContinuousInput(active) ? active : null;
+  historyCoalesceAt = now;
+  historyCurrent = snap;
+  updateHistoryButtons();
+}
+
+function applyHistorySnapshot(snap: string) {
+  historySuppressed = true;
+  doc = sanitize(JSON.parse(snap));
+  deselect();
+  buildAll();
+  historySuppressed = false;
+  updateHistoryButtons();
+}
+
+function undo() {
+  if (!historyUndo.length) return;
+  historyRedo.push(historyCurrent);
+  if (historyRedo.length > HISTORY_CAP) historyRedo.shift();
+  applyHistorySnapshot(historyUndo.pop()!);
+}
+
+function redo() {
+  if (!historyRedo.length) return;
+  historyUndo.push(historyCurrent);
+  if (historyUndo.length > HISTORY_CAP) historyUndo.shift();
+  applyHistorySnapshot(historyRedo.pop()!);
+}
+
+(document.querySelector("#undoBtn") as HTMLButtonElement).onclick = undo;
+(document.querySelector("#redoBtn") as HTMLButtonElement).onclick = redo;
 
 // Re-attach hover/drag listeners on every render — innerHTML rebuilds the DOM.
 function attachXfInteractivity() {
@@ -999,7 +1252,11 @@ function attachXfInteractivity() {
   svgEl.addEventListener("pointerdown", (e) => {
     if (!(e.target as Element).closest("[data-el]")) deselect();
   });
-  for (const key of XF_KEYS) {
+  // Text boxes are dynamic in number, so they're not part of the fixed
+  // XF_KEYS union — add each one's runtime `text:<id>` key so every box is
+  // selectable/movable/rotatable/resizable exactly like the fixed elements.
+  const allKeys: XfKey[] = [...XF_KEYS, ...doc.comp.texts.map((tb) => textXfKey(tb.id))];
+  for (const key of allKeys) {
     const g = svgEl.querySelector(`[data-el="${key}"]`) as SVGGElement | null;
     if (!g) continue;
     g.classList.add("xf-el");
@@ -1015,25 +1272,107 @@ function attachXfInteractivity() {
   }
 }
 
+// --- collapsible right-panel sections -----------------------------------------
+// Each control group gets its own disclosure; open/closed state is per-section
+// and remembered across visits. Sensible defaults: the photo library and
+// background texture pickers (big image grids, least-used) start collapsed;
+// composition/layout/shuffle and everything else starts open.
+
+const SECTION_KEY = "foldCommons.sections.v1";
+
+function loadSectionState(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(SECTION_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function sectionOpen(key: string, defaultOpen: boolean): boolean {
+  const v = loadSectionState()[key];
+  return typeof v === "boolean" ? v : defaultOpen;
+}
+function setSectionOpen(key: string, open: boolean) {
+  try {
+    const state = loadSectionState();
+    state[key] = open;
+    localStorage.setItem(SECTION_KEY, JSON.stringify(state));
+  } catch {
+    /* private mode etc — the toggle still works, just doesn't stick */
+  }
+}
+
+// Builds `build`'s content off-DOM first so an empty section (wrong template
+// kind, nothing applicable right now) renders no header at all instead of an
+// empty disclosure. Non-empty content gets a clickable title+chevron header;
+// open state persists per `key` and animates via a plain max-height transition.
+function section(into: HTMLElement, key: string, title: string, defaultOpen: boolean, build: (body: HTMLElement) => void) {
+  const scratch = document.createElement("div");
+  build(scratch);
+  if (!scratch.childNodes.length) return;
+  const isOpen = sectionOpen(key, defaultOpen);
+  const wrap = h(`<div class="panel-section${isOpen ? " open" : ""}">
+    <button type="button" class="panel-section-head"><h3 class="panel-title">${title}</h3><span class="chev">›</span></button>
+    <div class="panel-section-body"><div class="panel-section-inner"></div></div>
+  </div>`);
+  const inner = wrap.querySelector(".panel-section-inner") as HTMLElement;
+  inner.append(...Array.from(scratch.childNodes));
+  into.appendChild(wrap);
+  const body = wrap.querySelector(".panel-section-body") as HTMLElement;
+  // Every build (not just the first) creates a brand-new .panel-section-body,
+  // and its CSS class starts it at max-height:0 with a transition — setting
+  // the real height right after insertion would otherwise animate open over
+  // ~220ms, during which the panel's scrollHeight is still short of its true
+  // total. That silently clamps a caller's scrollTop restore (buildRight's
+  // scroll-position preservation) to whatever the panel could scroll to at
+  // that half-grown instant. Suppress the transition for this initial snap
+  // to size — a forced reflow commits "no transition" before the height
+  // change, then the CSS transition is restored so a later manual toggle
+  // click still animates normally.
+  body.style.transition = "none";
+  body.style.maxHeight = isOpen ? inner.scrollHeight + "px" : "0px";
+  void body.offsetHeight; // flush styles so "none" actually applies first
+  body.style.transition = "";
+  (wrap.querySelector(".panel-section-head") as HTMLButtonElement).onclick = () => {
+    const next = !wrap.classList.contains("open");
+    wrap.classList.toggle("open", next);
+    setSectionOpen(key, next);
+    body.style.maxHeight = next ? inner.scrollHeight + "px" : "0px";
+  };
+}
+
 function buildRight() {
+  // rightPanel is itself the scrolling element — clearing its innerHTML
+  // collapses scrollHeight and snaps scrollTop to 0, so every click that
+  // rebuilds the panel (frame pickers, add/delete text box, etc.) would
+  // otherwise yank the panel back to the top. Restore the position after
+  // rebuilding, clamped to the new (possibly shorter) content height.
+  const scrollY = rightPanel.scrollTop;
   rightPanel.innerHTML = "";
-  compControls(rightPanel);
-  photoControls(rightPanel);
-  fieldControls(rightPanel);
-  sigControls(rightPanel);
-  motifControls(rightPanel);
-  lineControls(rightPanel);
-  diagramControls(rightPanel);
-  stickerControls(rightPanel);
-  exportControls(rightPanel);
+  section(rightPanel, "composition", "Composition", true, compControls);
+  section(rightPanel, "photo", "Photo", false, photoLibraryControls);
+  section(rightPanel, "bg", "Background texture", false, bgTextureControls);
+  section(rightPanel, "words", "Words", true, fieldControls);
+  section(rightPanel, "texts", "Text boxes", true, textBoxesControls);
+  section(rightPanel, "signature", "Signature · F·O·L·D net", true, sigControls);
+  section(rightPanel, "motif", "Motif", true, motifControls);
+  section(rightPanel, "line", "The Line", true, lineControls);
+  section(rightPanel, "diagram", "Diagram", true, diagramControls);
+  section(rightPanel, "marks", "Marks", true, stickerControls);
+  section(rightPanel, "export", "Ship it", true, exportControls);
+  rightPanel.scrollTop = scrollY;
 }
 
 // --- gallery -----------------------------------------------------------------
 
-function buildGallery() {
+let galleryLoadToken = 0;
+
+async function buildGallery() {
   const view = $("#galleryView");
+  view.innerHTML = `<div class="g-empty">Loading…</div>`;
+  const token = ++galleryLoadToken;
+  const items: MergedGalleryItem[] = await fetchGalleryMerged();
+  if (token !== galleryLoadToken) return; // a newer load superseded this one
   view.innerHTML = "";
-  const items = loadGallery();
   if (!items.length) {
     view.appendChild(
       h(`<div class="g-empty">Nothing saved yet. Make something in the studio and
@@ -1050,7 +1389,7 @@ function buildGallery() {
       <div class="meta">
         <div class="n">${item.name}</div>
         ${item.maker ? `<div class="mk">by ${item.maker}</div>` : ""}
-        <div class="d">${item.date}</div>
+        <div class="d">${item.date}${item.source === "remote" ? " · shared" : ""}</div>
         <div class="row"></div>
       </div></div>`);
     const row = card.querySelector(".row")!;
@@ -1068,12 +1407,17 @@ function buildGallery() {
       share.textContent = "✓";
       setTimeout(() => (share.textContent = "Link"), 1200);
     };
-    const del = h(`<button class="mini">✕</button>`);
-    del.onclick = () => {
-      removeFromGallery(item.id);
-      buildGallery();
-    };
-    row.append(remix, share, del);
+    row.append(remix, share);
+    // Remote gallery entries have no public-facing delete path — only local
+    // saves can be removed from this browser.
+    if (item.source === "local") {
+      const del = h(`<button class="mini">✕</button>`);
+      del.onclick = () => {
+        removeLocalGalleryItem(item.id);
+        buildGallery();
+      };
+      row.append(del);
+    }
     view.appendChild(card);
   }
 }
@@ -1169,7 +1513,7 @@ function headerLogo() {
   const inner = SIGNATURE_ENGINE.render({
     w: 150,
     h: 64,
-    p: { tiles: 1, style: 3, scatter: 0.55, size: 2.2, weight: 3 },
+    p: { tiles: 1, style: 3, scatter: 0.55, size: 2.2, weight: 3, even: 1 },
     colors: [],
     ink: "#03071B",
     ground: "none",

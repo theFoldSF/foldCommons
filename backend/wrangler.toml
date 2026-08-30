@@ -1,0 +1,31 @@
+name = "fold-commons-backend"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# R2 bucket that stores the community photo library. Objects are keyed by
+# their generated id; w/h/name live as custom metadata (see src/index.ts).
+[[r2_buckets]]
+binding = "PHOTOS_BUCKET"
+bucket_name = "fold-commons-photos"
+
+# CORS origin allowed to call this worker. "*" is fine for local dev; before
+# going to production, set this to the real fold-commons app origin, e.g.
+# "https://fold-commons.vercel.app" (either edit here and redeploy, or run
+# `wrangler secret put ALLOWED_ORIGIN` to override without a redeploy... note
+# secrets and vars both surface as env.ALLOWED_ORIGIN, so pick one place).
+[vars]
+ALLOWED_ORIGIN = "*"
+
+# UPLOAD_TOKEN is a secret, not a var — never checked into wrangler.toml.
+# Set it once per environment with:
+#   wrangler secret put UPLOAD_TOKEN
+# The worker reads it as env.UPLOAD_TOKEN and requires it on POST /photos
+# and DELETE /gallery/:id via `Authorization: Bearer <token>`.
+
+# D1 database backing the community gallery (see schema.sql). Create it with
+# `wrangler d1 create fold-commons`, then paste the `database_id` it prints
+# below (Jasper does this step — it talks to Cloudflare).
+[[d1_databases]]
+binding = "DB"
+database_name = "fold-commons"
+database_id = "REPLACE_ME_AFTER_WRANGLER_D1_CREATE"

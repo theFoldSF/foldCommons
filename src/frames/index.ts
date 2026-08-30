@@ -21,6 +21,44 @@ export const FRAMES: FrameDef[] = [
 
 export const frameById = (id: string) => FRAMES.find((f) => f.id === id) ?? FRAMES[0];
 
+// Word-plate frames — shared by the title's contrast plate and every text
+// box. Narrower than the full FRAMES set: the designer shapes (blob/swoop/
+// drape) read as photo-frame moves, not word marks, so they're left off;
+// "rect" restores the plain rounded-rectangle plate the title always used
+// before frame choice existed, and "scallop-chip" is the small bumpy-cloud
+// shape shared with the date/time chips (not the window-scale "scallop"
+// frame's many tilted lobes) so a scalloped word plate reads as the same
+// mark language as the chip row, not the photo/motif window's shape family.
+export const PLATE_FRAMES: FrameDef[] = [
+  { id: "rect", label: "Rounded" },
+  { id: "wobble", label: "Hand-cut" },
+  { id: "scallop-chip", label: "Scallop" },
+];
+
+// Designer shapes (blob/drape) keep their own aspect ratio — designerFit()
+// below letterboxes them inside a mismatched box instead of stretching, so
+// callers that want the shape to fill its box exactly (text/title plates)
+// should size the box to this aspect first. null for generated shapes, which
+// have no fixed aspect of their own.
+export function frameAspect(id: string): number | null {
+  const s = DESIGNER_SHAPES.find((sh) => sh.id === id);
+  return s ? s.w / s.h : null;
+}
+
+// The scallop generator shrinks its tabbed rect a few percent before tilting
+// it a few degrees, so the rotated bounding box still clears the outer w×h
+// slot it's handed. Callers that need to size CONTENT (e.g. centered text) to
+// the shape's own pre-tilt interior — not the outer slot — use this to get
+// that shrink factor. It depends only on the box's aspect ratio, so it's
+// valid to call with either the outer slot or the desired interior box.
+export function scallopShrink(seed: number, w: number, h: number): number {
+  const r = rng((seed >>> 0) * 15485863 + "scallop".length * 97);
+  const tilt = (r() - 0.5) * 6;
+  const rad = (Math.abs(tilt) * Math.PI) / 180;
+  const cosA = Math.cos(rad), sinA = Math.sin(rad);
+  return Math.min(1, w / (w * cosA + h * sinA), h / (w * sinA + h * cosA));
+}
+
 // Scale a designer path (absolute coords, mixed commands) into the slot.
 // Returned as a transform on a <path> group instead of rewriting the d.
 function designerFit(id: string, w: number, h: number): { d: string; transform: string } {
@@ -139,6 +177,22 @@ function perimeter(w: number, h: number, step: number): { p: Pt; n: Pt; corner: 
 // Same (id, seed, w, h) always yields the same shape.
 export function framePath(id: string, seed: number, w: number, h: number): { d: string; transform?: string } {
   if (id === "blob" || id === "drape") return designerFit(id, w, h);
+
+  // Plain rounded rectangle — the title plate's original look, before it had
+  // a frame choice at all. Same shape regardless of seed.
+  if (id === "rect") {
+    const rx = Math.min(Math.min(w, h) * 0.22, w / 2, h / 2);
+    return {
+      d: `M ${rx.toFixed(1)} 0 H ${(w - rx).toFixed(1)} A ${rx.toFixed(1)} ${rx.toFixed(1)} 0 0 1 ${w.toFixed(1)} ${rx.toFixed(1)} V ${(h - rx).toFixed(1)} A ${rx.toFixed(1)} ${rx.toFixed(1)} 0 0 1 ${(w - rx).toFixed(1)} ${h.toFixed(1)} H ${rx.toFixed(1)} A ${rx.toFixed(1)} ${rx.toFixed(1)} 0 0 1 0 ${(h - rx).toFixed(1)} V ${rx.toFixed(1)} A ${rx.toFixed(1)} ${rx.toFixed(1)} 0 0 1 ${rx.toFixed(1)} 0 Z`,
+    };
+  }
+
+  // Chip-scale scallop — identical generator to the date/time chips'
+  // "scallop" chip style, at no tilt, so a title plate reads as the same
+  // mark language as the chip row (unlike the frame family's own "scallop",
+  // which is tuned window-scale with many tilted lobes).
+  if (id === "scallop-chip") return { d: scallopChipPath(seed, w, h) };
+
   const r = rng((seed >>> 0) * 15485863 + id.length * 97);
   const m = Math.min(w, h);
 
