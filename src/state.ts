@@ -6,7 +6,7 @@
 import { GROUNDS, REGISTERS, SEASONS, type RegisterKey, LINE_MOTIF } from "./brand/tokens";
 import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById, shuffleParams } from "./engines/index";
 import { FRAMES, PLATE_FRAMES } from "./frames/index";
-import { TEMPLATES, templateById, type Template } from "./templates/index";
+import { TEMPLATES, templateById, defaultDateChip, type Template } from "./templates/index";
 import { MARKS } from "./marks/index";
 import { PHOTOS } from "./photos/index";
 
@@ -157,9 +157,9 @@ export function newDoc(templateId: string): Doc {
   const fields: Record<string, string> = {};
   for (const z of t.zones) fields[z.id] = z.default;
   if (t.composed) {
-    fields.title = fields.title ?? "Friday Aperitivo";
+    fields.title = fields.title ?? "Aperitivo Night";
     fields.detail = fields.detail ?? "";
-    fields.date = fields.date ?? "Thurs Jul 2";
+    fields.date = defaultDateChip();
     fields.time = fields.time ?? "9pm";
   }
   const engine = ENGINES[0];
