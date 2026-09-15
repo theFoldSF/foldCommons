@@ -47,3 +47,22 @@ CREATE TABLE IF NOT EXISTS palettes (
 );
 
 CREATE INDEX IF NOT EXISTS palettes_created_at ON palettes (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS gallery_comments (
+  id TEXT PRIMARY KEY,
+  gallery_id TEXT NOT NULL,    -- the gallery row this is about
+  text TEXT NOT NULL,
+  author TEXT,
+  -- What the commenter is saying about the piece: it works, it doesn't, or
+  -- neither. Drives the good/bad example filter in the gallery.
+  verdict TEXT NOT NULL DEFAULT 'note',  -- 'good' | 'bad' | 'note'
+  -- Normalized 0..1 position on the asset. NULL for a comment about the piece
+  -- as a whole; set when the commenter pinned it to a specific spot, so a pin
+  -- survives the piece being re-rendered at any size.
+  x REAL,
+  y REAL,
+  edit_key TEXT NOT NULL,      -- author-owns-their-own, as with palettes
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS gallery_comments_gallery ON gallery_comments (gallery_id, created_at);

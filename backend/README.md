@@ -1,8 +1,8 @@
 # fold-commons-backend
 
 Cloudflare Worker that stores the community photo library in R2 and the
-community gallery, feedback inbox, signature tuning log, and team color
-palettes in D1. R2
+community gallery (with its critique comments), feedback inbox, signature
+tuning log, and team color palettes in D1. R2
 objects plus their custom metadata (`name`, `w`, `h`) are the entire photo
 store; everything else is a small D1 table (see `schema.sql`).
 
@@ -150,6 +150,26 @@ local development but should be tightened to the real app origin (e.g.
   (parsed server-side), not a doubly-encoded string.
 - `DELETE /tuning/:id` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
   Prunes one note from the pool. 204 on success, 404 if no row matched.
+
+- `GET /gallery/:id/comments` — **public.** `[{ id, gallery_id, text, author,
+  verdict, x, y, created_at }, ...]`, oldest first, capped at 500. `verdict`
+  is `"good" | "bad" | "note"`. `x`/`y` are normalized 0..1 positions on the
+  asset, or both `null` for a comment about the whole piece. `edit_key` is
+  never included.
+- `POST /gallery/:id/comments` — **public, no auth.** Body `{ text, verdict?,
+  author?, x?, y? }`. `text` is required, capped at 2000 chars. Coordinates
+  are clamped to 0..1, and a comment with only one of the two is stored
+  unpinned rather than rejected. 404 if the piece doesn't exist. Returns the
+  row **plus a one-time `edit_key`**.
+- `DELETE /gallery/:id/comments/:cid` — needs `?key=<edit_key>` or the
+  moderation token. 204, or 404 if no row matched.
+
+Note the route order in `index.ts`: these are matched **before**
+`/gallery/:id`, which would otherwise swallow them.
+
+Comments use the same open-write / author-owned-delete shape as palettes, and
+for the same reason — critique is only useful if everyone can write it, but an
+open delete would let anyone erase anyone's feedback.
 
 - `GET /palettes` — **public.** `[{ id, name, maker, colors, created_at },
   ...]`, newest first, capped at 200. `colors` is a real JSON object keyed by

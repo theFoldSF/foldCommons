@@ -31,14 +31,25 @@ export async function fetchGalleryMerged(): Promise<MergedGalleryItem[]> {
 
   try {
     const rows: RemoteGalleryRow[] = await (await fetch(`${base}/gallery`)).json();
-    const remote: MergedGalleryItem[] = rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      maker: row.maker ?? undefined,
-      date: row.created_at.slice(0, 10),
-      doc: sanitize(row.doc as Doc),
-      source: "remote",
-    }));
+    // Sanitize per row, not per batch: one malformed doc (an old shape, or
+    // something written straight to the API) used to throw out of the whole
+    // map and silently drop every remote entry, leaving the gallery looking
+    // empty. Skip the bad row instead and keep the rest.
+    const remote: MergedGalleryItem[] = [];
+    for (const row of rows) {
+      try {
+        remote.push({
+          id: row.id,
+          name: row.name,
+          maker: row.maker ?? undefined,
+          date: row.created_at.slice(0, 10),
+          doc: sanitize(row.doc as Doc),
+          source: "remote",
+        });
+      } catch {
+        // unreadable entry — leave it out rather than lose the gallery
+      }
+    }
     return [...remote, ...local].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   } catch {
     return local;

@@ -24,6 +24,9 @@
 //   POST   /palettes           -> save one (public); returns a one-time edit_key
 //   PUT    /palettes/:id       -> update one (edit_key or bearer token)
 //   DELETE /palettes/:id       -> remove one (edit_key or bearer token)
+//   GET    /gallery/:id/comments      -> list comments on a piece (public)
+//   POST   /gallery/:id/comments      -> add one (public); returns edit_key
+//   DELETE /gallery/:id/comments/:cid -> remove one (edit_key or bearer token)
 //   OPTIONS *                   -> CORS preflight
 //
 // See ../README.md for deploy steps.
@@ -58,6 +61,17 @@ interface FeedbackRow {
   name: string | null;
   context: string | null;
   status: string;
+  created_at: string;
+}
+
+interface GalleryCommentRow {
+  id: string;
+  gallery_id: string;
+  text: string;
+  author: string | null;
+  verdict: string;
+  x: number | null;
+  y: number | null;
   created_at: string;
 }
 
@@ -607,6 +621,18 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (url.pathname === "/gallery" && request.method === "POST") {
         return await createGalleryItem(request, env);
       }
+      // Longer gallery paths first: /gallery/:id would otherwise swallow them.
+      const commentsMatch = url.pathname.match(/^\/gallery\/([^/]+)\/comments$/);
+      if (commentsMatch && request.method === "GET") {
+        return await listGalleryComments(decodeURIComponent(commentsMatch[1]), env);
+      }
+      if (commentsMatch && request.method === "POST") {
+        return await createGalleryComment(decodeURIComponent(commentsMatch[1]), request, env);
+      }
+      const oneCommentMatch = url.pathname.match(/^\/gallery\/[^/]+\/comments\/([^/]+)$/);
+      if (oneCommentMatch && request.method === "DELETE") {
+        return await deleteGalleryComment(decodeURIComponent(oneCommentMatch[1]), request, env);
+      }
       const galleryMatch = url.pathname.match(/^\/gallery\/([^/]+)$/);
       if (galleryMatch && request.method === "DELETE") {
         return await deleteGalleryItem(decodeURIComponent(galleryMatch[1]), request, env);
@@ -775,6 +801,86 @@ async function deletePalette(id: string, request: Request, env: Env): Promise<Re
     return json({ error: "Unauthorized" }, env, { status: 401 });
   }
   const { meta } = await env.DB.prepare("DELETE FROM palettes WHERE id = ?").bind(id).run();
+  if (!meta.changes) return json({ error: "Not found" }, env, { status: 404 });
+  return new Response(null, { status: 204 });
+}
+
+const MAX_COMMENT_TEXT_LEN = 2000;
+const MAX_COMMENT_AUTHOR_LEN = 120;
+const VERDICTS = ["good", "bad", "note"];
+
+function toCommentItem(row: GalleryCommentRow) {
+  return {
+    id: row.id,
+    gallery_id: row.gallery_id,
+    text: row.text,
+    author: row.author,
+    verdict: row.verdict,
+    // Either both coordinates or neither — a half-pinned comment would render
+    // at the wrong place, so it is treated as unpinned.
+    x: row.x === null || row.y === null ? null : row.x,
+    y: row.x === null || row.y === null ? null : row.y,
+    created_at: row.created_at,
+  };
+}
+
+async function listGalleryComments(galleryId: string, env: Env): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT id, gallery_id, text, author, verdict, x, y, created_at FROM gallery_comments WHERE gallery_id = ? ORDER BY created_at ASC LIMIT 500"
+  )
+    .bind(galleryId)
+    .all<GalleryCommentRow>();
+  return json((results ?? []).map(toCommentItem), env);
+}
+
+async function createGalleryComment(galleryId: string, request: Request, env: Env): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, env, { status: 400 });
+  }
+  const text = typeof body.text === "string" ? body.text.trim().slice(0, MAX_COMMENT_TEXT_LEN) : "";
+  if (!text) return json({ error: "'text' must be a non-empty string" }, env, { status: 400 });
+  const verdict = typeof body.verdict === "string" && VERDICTS.includes(body.verdict) ? body.verdict : "note";
+  const author =
+    typeof body.author === "string" && body.author.trim()
+      ? body.author.trim().slice(0, MAX_COMMENT_AUTHOR_LEN)
+      : null;
+
+  // A pin needs both coordinates inside the asset; anything else is stored as
+  // an unpinned comment rather than rejected, so a client that can't work out
+  // a position still gets its note saved.
+  const nx = typeof body.x === "number" && Number.isFinite(body.x) ? Math.min(1, Math.max(0, body.x)) : null;
+  const ny = typeof body.y === "number" && Number.isFinite(body.y) ? Math.min(1, Math.max(0, body.y)) : null;
+  const x = nx !== null && ny !== null ? nx : null;
+  const y = nx !== null && ny !== null ? ny : null;
+
+  // The piece must exist — a comment pinned to nothing is unreachable.
+  const piece = await env.DB.prepare("SELECT id FROM gallery WHERE id = ?").bind(galleryId).first<{ id: string }>();
+  if (!piece) return json({ error: "Not found" }, env, { status: 404 });
+
+  const id = crypto.randomUUID();
+  const edit_key = crypto.randomUUID();
+  const created_at = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO gallery_comments (id, gallery_id, text, author, verdict, x, y, edit_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  )
+    .bind(id, galleryId, text, author, verdict, x, y, edit_key, created_at)
+    .run();
+  return json({ id, gallery_id: galleryId, text, author, verdict, x, y, created_at, edit_key }, env, { status: 201 });
+}
+
+async function deleteGalleryComment(commentId: string, request: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(request, env)) {
+    const key = new URL(request.url).searchParams.get("key");
+    if (!key) return json({ error: "Unauthorized" }, env, { status: 401 });
+    const row = await env.DB.prepare("SELECT edit_key FROM gallery_comments WHERE id = ?")
+      .bind(commentId)
+      .first<{ edit_key: string }>();
+    if (!row || row.edit_key !== key) return json({ error: "Unauthorized" }, env, { status: 401 });
+  }
+  const { meta } = await env.DB.prepare("DELETE FROM gallery_comments WHERE id = ?").bind(commentId).run();
   if (!meta.changes) return json({ error: "Not found" }, env, { status: 404 });
   return new Response(null, { status: 204 });
 }

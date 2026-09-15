@@ -21,6 +21,16 @@ import {
 } from "./brand/tokens";
 import { loadFonts, fontFamilyCss } from "./brand/fonts";
 import {
+  listComments,
+  addComment,
+  deleteComment,
+  canDeleteComment,
+  commentsAvailable,
+  summarize as summarizeComments,
+  type GalleryComment,
+  type Verdict,
+} from "./comments/index";
+import {
   listPalettes as fetchTeamPalettes,
   createPalette as saveTeamPalette,
   updatePalette as updateTeamPalette,
@@ -1260,6 +1270,19 @@ function openSaveModal(saveB: HTMLElement) {
         <input type="text" class="maker-input" value="${savedMaker.replaceAll('"', "&quot;")}" placeholder="Anonymous"></div>
       <div class="field"><label>Piece name</label>
         <input type="text" class="name-input" value="${pieceName.replaceAll('"', "&quot;")}" placeholder="Untitled"></div>
+      ${
+        commentsAvailable()
+          ? `<div class="field"><label>Is this working?</label>
+               <div class="seg verdict-seg">
+                 <button type="button" data-v="good">👍 Working</button>
+                 <button type="button" data-v="bad">👎 Not working</button>
+                 <button type="button" data-v="note" class="active">Just saving</button>
+               </div></div>
+             <div class="field"><label>Note (optional)</label>
+               <textarea class="note-input" rows="2" placeholder="What's working, what isn't…"></textarea>
+               <div class="note" style="margin-top:6px">You can pin notes to specific spots on the piece from the gallery.</div></div>`
+          : ""
+      }
       <div class="modal-actions">
         <button class="act ghost modal-cancel">Cancel</button>
         <button class="act modal-save">Save</button>
@@ -1269,12 +1292,23 @@ function openSaveModal(saveB: HTMLElement) {
   document.body.appendChild(overlay);
   const nameInput = overlay.querySelector(".name-input") as HTMLInputElement;
   const makerInput = overlay.querySelector(".maker-input") as HTMLInputElement;
+  const noteInput = overlay.querySelector(".note-input") as HTMLTextAreaElement | null;
+  let verdict: Verdict = "note";
+  overlay.querySelectorAll(".verdict-seg button").forEach((b) => {
+    (b as HTMLButtonElement).onclick = () => {
+      verdict = (b as HTMLElement).dataset.v as Verdict;
+      overlay
+        .querySelectorAll(".verdict-seg button")
+        .forEach((x) => x.classList.toggle("active", (x as HTMLElement).dataset.v === verdict));
+    };
+  });
   nameInput.focus();
   nameInput.select();
 
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") close();
-    if (e.key === "Enter") save();
+    // Enter submits, except inside the note box where it should make a newline.
+    if (e.key === "Enter" && e.target !== noteInput) save();
   };
   function close() {
     window.removeEventListener("keydown", onKey);
@@ -1291,7 +1325,14 @@ function openSaveModal(saveB: HTMLElement) {
     }
     close();
     saveB.textContent = "Saving…";
-    await saveGalleryItem(doc, name, maker);
+    const saved = await saveGalleryItem(doc, name, maker);
+    // The verdict rides along as the piece's first comment — only for pieces
+    // that landed on the backend, since a local-only save has nothing to
+    // attach a comment to.
+    const note = noteInput?.value.trim() ?? "";
+    if (saved.source === "remote" && (note || verdict !== "note")) {
+      await addComment(saved.id, note || (verdict === "good" ? "Working" : "Not working"), verdict, maker || undefined);
+    }
     saveB.textContent = "Saved ✓";
     setTimeout(() => (saveB.textContent = "Save to gallery"), 1400);
     if ($("#galleryView").classList.contains("active")) buildGallery();
@@ -1919,6 +1960,187 @@ function buildRight() {
 
 let galleryLoadToken = 0;
 
+// --- critique ------------------------------------------------------------
+// A piece opened big, with the team's notes beside it. A note can be pinned to
+// a point on the asset: click the art, the click lands as a normalized 0..1
+// coordinate, and the pin then holds at that spot however the piece is later
+// re-rendered.
+function openCritique(item: MergedGalleryItem, onClose: () => void) {
+  const docForRender = sanitize(JSON.parse(JSON.stringify(item.doc)));
+  const overlay = h(`<div class="modal-overlay crit-overlay">
+    <div class="crit-card">
+      <button type="button" class="hp-close mini">✕ Close</button>
+      <h3 class="modal-title crit-title"></h3>
+      <div class="crit-body">
+        <div class="crit-art">
+          <div class="crit-art-inner">${renderDoc(docForRender)}</div>
+          <div class="crit-pins"></div>
+        </div>
+        <div class="crit-side">
+          <div class="note crit-hint">Click anywhere on the piece to pin a note to that spot.</div>
+          <div class="crit-list"></div>
+          <div class="crit-form"></div>
+        </div>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  (overlay.querySelector(".crit-title") as HTMLElement).textContent =
+    item.name + (item.maker ? ` — by ${item.maker}` : "");
+
+  const art = overlay.querySelector(".crit-art") as HTMLElement;
+  const pinLayer = overlay.querySelector(".crit-pins") as HTMLElement;
+  const list = overlay.querySelector(".crit-list") as HTMLElement;
+  const form = overlay.querySelector(".crit-form") as HTMLElement;
+
+  let comments: GalleryComment[] = [];
+  let pending: { x: number; y: number } | null = null;
+  let verdict: Verdict = "note";
+
+  function close() {
+    window.removeEventListener("keydown", onKey);
+    overlay.remove();
+    onClose();
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+  };
+  window.addEventListener("keydown", onKey);
+  (overlay.querySelector(".hp-close") as HTMLButtonElement).onclick = close;
+  overlay.addEventListener("pointerdown", (e) => {
+    if (e.target === overlay) close();
+  });
+
+  // Measure against the rendered art box, not the click target, so a click on
+  // the SVG and a click on the padding around it resolve the same way.
+  art.onclick = (e) => {
+    const r = art.getBoundingClientRect();
+    pending = {
+      x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+    };
+    renderPins();
+    renderForm();
+    (form.querySelector(".crit-text") as HTMLTextAreaElement | null)?.focus();
+  };
+
+  // Pins are numbered among themselves — not by position in the list — so the
+  // first pin reads as 1 even when unpinned notes were written before it. The
+  // list uses this same map, so a pin and its row always show the same number.
+  function pinNumbers(): Map<string, number> {
+    const m = new Map<string, number>();
+    let n = 0;
+    for (const c of comments) if (c.x !== null && c.y !== null) m.set(c.id, ++n);
+    return m;
+  }
+
+  function renderPins() {
+    pinLayer.innerHTML = "";
+    const nums = pinNumbers();
+    comments.forEach((c) => {
+      if (c.x === null || c.y === null) return;
+      const pin = h(
+        `<button type="button" class="crit-pin v-${c.verdict}" style="left:${(c.x * 100).toFixed(2)}%;top:${(c.y * 100).toFixed(2)}%">${nums.get(c.id)}</button>`
+      );
+      pin.title = c.text;
+      pin.onclick = (e) => {
+        e.stopPropagation();
+        const row = list.querySelector(`[data-cid="${c.id}"]`);
+        row?.scrollIntoView({ block: "nearest" });
+        row?.classList.add("flash");
+        setTimeout(() => row?.classList.remove("flash"), 900);
+      };
+      pinLayer.appendChild(pin);
+    });
+    if (pending) {
+      pinLayer.appendChild(
+        h(`<div class="crit-pin pending" style="left:${(pending.x * 100).toFixed(2)}%;top:${(pending.y * 100).toFixed(2)}%">+</div>`)
+      );
+    }
+  }
+
+  function renderList() {
+    list.innerHTML = "";
+    if (!comments.length) {
+      list.appendChild(h(`<div class="note">No notes yet.</div>`));
+      return;
+    }
+    const nums = pinNumbers();
+    comments.forEach((c) => {
+      const row = h(`<div class="crit-row v-${c.verdict}" data-cid="${c.id}">
+        <div class="crit-num">${nums.get(c.id) ?? "·"}</div>
+        <div class="crit-main"><div class="crit-text-body"></div><div class="meta"></div></div>
+      </div>`);
+      (row.querySelector(".crit-text-body") as HTMLElement).textContent = c.text;
+      (row.querySelector(".meta") as HTMLElement).textContent =
+        `${c.verdict === "good" ? "👍 " : c.verdict === "bad" ? "👎 " : ""}${c.author || "Anonymous"} · ${new Date(c.created_at).toLocaleDateString()}`;
+      if (canDeleteComment(c.id)) {
+        const del = h(`<button type="button" class="mini">✕</button>`);
+        del.onclick = async () => {
+          if (await deleteComment(item.id, c.id)) await refresh();
+        };
+        (row.querySelector(".crit-main") as HTMLElement).appendChild(del);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  function renderForm() {
+    form.innerHTML = "";
+    const wrap = h(`<div>
+      <div class="seg verdict-seg" style="margin-bottom:8px">
+        <button type="button" data-v="good">👍 Working</button>
+        <button type="button" data-v="bad">👎 Not working</button>
+        <button type="button" data-v="note">Note</button>
+      </div>
+      <textarea class="crit-text" rows="3" placeholder="${pending ? "What's happening at this spot?" : "A note about the whole piece…"}"></textarea>
+      <div class="row" style="margin-top:8px"></div>
+    </div>`);
+    wrap.querySelectorAll(".verdict-seg button").forEach((b) => {
+      b.classList.toggle("active", (b as HTMLElement).dataset.v === verdict);
+      (b as HTMLButtonElement).onclick = () => {
+        verdict = (b as HTMLElement).dataset.v as Verdict;
+        wrap
+          .querySelectorAll(".verdict-seg button")
+          .forEach((x) => x.classList.toggle("active", (x as HTMLElement).dataset.v === verdict));
+      };
+    });
+    const actions = wrap.querySelector(".row") as HTMLElement;
+    const add = h(`<button class="act">${pending ? "Pin note" : "Add note"}</button>`);
+    add.onclick = async () => {
+      const ta = wrap.querySelector(".crit-text") as HTMLTextAreaElement;
+      const text = ta.value.trim();
+      if (!text) return;
+      add.textContent = "Saving…";
+      await addComment(item.id, text, verdict, makerName(), pending);
+      pending = null;
+      verdict = "note";
+      await refresh();
+    };
+    actions.appendChild(add);
+    if (pending) {
+      const cancel = h(`<button class="act ghost">Unpin</button>`);
+      cancel.onclick = () => {
+        pending = null;
+        renderPins();
+        renderForm();
+      };
+      actions.appendChild(cancel);
+    }
+    form.appendChild(wrap);
+  }
+
+  async function refresh() {
+    comments = await listComments(item.id);
+    renderPins();
+    renderList();
+    renderForm();
+  }
+
+  renderForm();
+  refresh();
+}
+
 async function buildGallery() {
   const view = $("#galleryView");
   view.innerHTML = `<div class="g-empty">Loading…</div>`;
@@ -1961,6 +2183,25 @@ async function buildGallery() {
       setTimeout(() => (share.textContent = "Link"), 1200);
     };
     row.append(remix, share);
+    // Critique is a backend feature and needs a backend id to hang comments
+    // off, so it is offered only for shared pieces.
+    if (commentsAvailable() && item.source === "remote") {
+      const crit = h(`<button class="mini">Notes</button>`);
+      crit.onclick = () => openCritique(item, () => buildGallery());
+      row.append(crit);
+      // Counts load per card after the grid is up, so the gallery doesn't wait
+      // on one request per piece before showing anything.
+      const badge = h(`<span class="crit-badge"></span>`);
+      (card.querySelector(".meta") as HTMLElement).appendChild(badge);
+      listComments(item.id).then((cs) => {
+        const { good, bad, total } = summarizeComments(cs);
+        if (!total) return;
+        badge.innerHTML =
+          `${good ? `<span class="v-good">👍 ${good}</span>` : ""}` +
+          `${bad ? `<span class="v-bad">👎 ${bad}</span>` : ""}` +
+          `<span class="v-note">${total} note${total === 1 ? "" : "s"}</span>`;
+      });
+    }
     // Remote gallery entries have no public-facing delete path — only local
     // saves can be removed from this browser.
     if (item.source === "local") {
