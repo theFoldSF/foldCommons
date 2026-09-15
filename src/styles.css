@@ -606,7 +606,17 @@ button.mini:hover { border-color: var(--ink); }
 }
 .pal-chip:not(.active):hover { border-color: var(--ink); }
 .pal-chip.active { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+/* Name over author, both clipped rather than wrapped — the picker is a column
+   of one-line chips and a long name must not push the dots around. */
+.pal-label { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
 .pal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-by {
+  font-size: 10px;
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .pal-dots { display: inline-flex; gap: 2px; flex: none; }
 .pal-dots i {
   width: 9px;
@@ -616,6 +626,13 @@ button.mini:hover { border-color: var(--ink); }
   border: 1px solid rgba(0, 0, 0, 0.15);
 }
 .pal-dots.big i { width: 14px; height: 14px; }
+
+/* Palette name and author read as one line of attribution, stacking on a
+   narrow window rather than squeezing both inputs to unusable widths. */
+.pal-meta-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) {
+  .pal-meta-row { grid-template-columns: 1fr; gap: 0; }
+}
 
 .pal-slots {
   display: grid;

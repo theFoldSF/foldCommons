@@ -789,11 +789,22 @@ async function updatePalette(id: string, request: Request, env: Env): Promise<Re
   const parsed = parsePaletteBody(body);
   if (typeof parsed === "string") return json({ error: parsed }, env, { status: 400 });
 
-  const { meta } = await env.DB.prepare("UPDATE palettes SET name = ?, colors = ? WHERE id = ?")
-    .bind(name, JSON.stringify(parsed.colors), id)
-    .run();
+  // `maker` is optional here, and absence is not the same as empty: a client
+  // that omits the field keeps whatever attribution the palette already has,
+  // so an older build can still rename a palette without erasing its author.
+  const hasMaker = Object.prototype.hasOwnProperty.call(body, "maker");
+  const maker =
+    typeof body.maker === "string" && body.maker.trim() ? body.maker.trim().slice(0, MAX_PALETTE_MAKER_LEN) : null;
+
+  const { meta } = hasMaker
+    ? await env.DB.prepare("UPDATE palettes SET name = ?, colors = ?, maker = ? WHERE id = ?")
+        .bind(name, JSON.stringify(parsed.colors), maker, id)
+        .run()
+    : await env.DB.prepare("UPDATE palettes SET name = ?, colors = ? WHERE id = ?")
+        .bind(name, JSON.stringify(parsed.colors), id)
+        .run();
   if (!meta.changes) return json({ error: "Not found" }, env, { status: 404 });
-  return json({ id, name, colors: parsed.colors }, env);
+  return json(hasMaker ? { id, name, maker, colors: parsed.colors } : { id, name, colors: parsed.colors }, env);
 }
 
 async function deletePalette(id: string, request: Request, env: Env): Promise<Response> {

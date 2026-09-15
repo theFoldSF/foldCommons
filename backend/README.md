@@ -180,8 +180,10 @@ open delete would let anyone erase anyone's feedback.
   least one is required, unknown keys are dropped rather than rejected so a
   new slot can't 400 an older client. Returns the row **plus a one-time
   `edit_key`** — the only time it is ever sent.
-- `PUT /palettes/:id` — body `{ name, colors }`. Needs either
-  `?key=<edit_key>` or `Authorization: Bearer <UPLOAD_TOKEN>`.
+- `PUT /palettes/:id` — body `{ name, colors, maker? }`. Needs either
+  `?key=<edit_key>` or `Authorization: Bearer <UPLOAD_TOKEN>`. `maker` is
+  optional and absence differs from empty: omit the field and the existing
+  attribution is left alone, send `""` to deliberately unsign a palette.
 - `DELETE /palettes/:id` — same auth as `PUT`. 204, or 404 if no row matched.
 
 Palettes use a different auth shape from everything else here, on purpose.

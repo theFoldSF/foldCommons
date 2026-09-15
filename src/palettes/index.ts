@@ -90,7 +90,15 @@ export async function createPalette(
   }
 }
 
-export async function updatePalette(id: string, name: string, colors: Palette): Promise<boolean> {
+// `maker` is sent only when the caller passes one. Omitting the field leaves
+// the existing attribution alone, so an edit never silently strips the author
+// off a palette.
+export async function updatePalette(
+  id: string,
+  name: string,
+  colors: Palette,
+  maker?: string
+): Promise<boolean> {
   const base = apiBase();
   const key = editKeyFor(id);
   if (!base || !key) return false;
@@ -98,7 +106,7 @@ export async function updatePalette(id: string, name: string, colors: Palette): 
     const res = await fetch(`${base}/palettes/${encodeURIComponent(id)}?key=${encodeURIComponent(key)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, colors }),
+      body: JSON.stringify(maker === undefined ? { name, colors } : { name, colors, maker }),
     });
     return res.ok;
   } catch {

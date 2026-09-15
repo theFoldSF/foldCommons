@@ -366,7 +366,8 @@ function buildPaletteRow(into: HTMLElement) {
     picker.innerHTML = "";
     const canonBtn = h(
       `<button class="pal-chip ${doc.comp.palette ? "" : "active"}">
-        <span class="pal-dots">${paletteDots(null)}</span><span class="pal-name">Canon</span></button>`
+        <span class="pal-dots">${paletteDots(null)}</span>
+        <span class="pal-label"><span class="pal-name">Canon</span></span></button>`
     );
     canonBtn.onclick = () => {
       doc.comp.palette = undefined;
@@ -376,9 +377,11 @@ function buildPaletteRow(into: HTMLElement) {
     for (const p of list) {
       const b = h(
         `<button class="pal-chip ${doc.comp.palette?.id === p.id ? "active" : ""}">
-          <span class="pal-dots">${paletteDots(p)}</span><span class="pal-name"></span></button>`
+          <span class="pal-dots">${paletteDots(p)}</span>
+          <span class="pal-label"><span class="pal-name"></span><span class="pal-by"></span></span></button>`
       );
       (b.querySelector(".pal-name") as HTMLElement).textContent = p.name;
+      (b.querySelector(".pal-by") as HTMLElement).textContent = p.maker || "Anonymous";
       b.title = p.maker ? `${p.name} — by ${p.maker}` : p.name;
       b.onclick = () => {
         // Colors travel inline on the doc, so a gallery entry or share link
@@ -425,20 +428,28 @@ function buildPaletteView() {
   let working: Palette = {};
   let name = "";
 
-  const nameField = h(`<div class="field"><label>Palette name</label>
-    <input type="text" class="pal-name-input" placeholder="e.g. Late summer"></div>`);
+  const metaRow = h(`<div class="pal-meta-row">
+    <div class="field"><label>Palette name</label>
+      <input type="text" class="pal-name-input" placeholder="e.g. Late summer"></div>
+    <div class="field"><label>Your name</label>
+      <input type="text" class="pal-maker-input" placeholder="Anonymous"></div>
+  </div>`);
   const slots = h(`<div class="pal-slots"></div>`);
   const preview = h(`<div class="pal-preview"></div>`);
   const actions = h(`<div class="row" style="margin-top:14px"></div>`);
   const status = h(`<div class="note pal-status"></div>`);
   const listHeader = h(`<h3 class="panel-title" style="margin-top:30px">Team palettes</h3>`);
   const list = h(`<div class="pal-list"></div>`);
-  body.append(nameField, slots, preview, actions, status, listHeader, list);
+  body.append(metaRow, slots, preview, actions, status, listHeader, list);
 
-  const nameInput = nameField.querySelector(".pal-name-input") as HTMLInputElement;
+  const nameInput = metaRow.querySelector(".pal-name-input") as HTMLInputElement;
+  const makerInput = metaRow.querySelector(".pal-maker-input") as HTMLInputElement;
   nameInput.oninput = () => {
     name = nameInput.value;
   };
+  // Prefilled from the last name this browser published under, so a regular
+  // contributor signs their palettes without retyping it every time.
+  makerInput.value = makerName() ?? "";
 
   function renderSlots() {
     const c = resolveColors(working);
@@ -482,6 +493,8 @@ function buildPaletteView() {
     working = {};
     name = "";
     nameInput.value = "";
+    // The author outlives any one palette — only the palette fields clear.
+    makerInput.value = makerName() ?? "";
     renderSlots();
     renderPreview();
     renderActions();
@@ -500,10 +513,12 @@ function buildPaletteView() {
         status.textContent = "Change at least one color before saving.";
         return;
       }
+      const maker = makerInput.value.trim();
+      if (maker) rememberMaker(maker);
       status.textContent = "Saving…";
       const ok = editing
-        ? await updateTeamPalette(editing.id, trimmed, working)
-        : !!(await saveTeamPalette(trimmed, working, makerName()));
+        ? await updateTeamPalette(editing.id, trimmed, working, maker)
+        : !!(await saveTeamPalette(trimmed, working, maker || undefined));
       status.textContent = ok ? "Saved ✓" : "Couldn't save — the backend didn't accept it.";
       if (ok) {
         paletteCache = await fetchTeamPalettes();
@@ -557,6 +572,7 @@ function buildPaletteView() {
           working = { ...p.colors };
           name = p.name;
           nameInput.value = p.name;
+          makerInput.value = p.maker ?? "";
           renderSlots();
           renderPreview();
           renderActions();
@@ -1252,6 +1268,16 @@ function makerName(): string | undefined {
     return localStorage.getItem(MAKER_KEY)?.trim() || undefined;
   } catch {
     return undefined;
+  }
+}
+
+// One name across the app: whatever you sign a palette with is what the
+// gallery and the tuner offer you next time.
+function rememberMaker(name: string) {
+  try {
+    localStorage.setItem(MAKER_KEY, name);
+  } catch {
+    /* private mode etc — the name just won't be prefilled next time */
   }
 }
 
