@@ -1,37 +1,59 @@
 # fold-commons-backend
 
 Cloudflare Worker that stores the community photo library in R2 and the
-community gallery in D1. R2 objects plus their custom metadata (`name`,
-`w`, `h`) are the entire photo store; the gallery is one small D1 table
-(see `schema.sql`).
+community gallery, feedback inbox, and signature tuning log in D1. R2
+objects plus their custom metadata (`name`, `w`, `h`) are the entire photo
+store; everything else is a small D1 table (see `schema.sql`).
 
 ## Deploy
+
+This Worker lives in **The Fold SF's** Cloudflare account
+(`3e871b0b1eb6ba48da27e2b9bd6a667d`), which is *not* the account this
+machine's `wrangler login` points at. Two guardrails matter:
+
+1. `account_id` is pinned in `wrangler.toml`, so a wrong-account deploy
+   fails loudly instead of quietly succeeding somewhere else.
+2. Authenticate with a scoped API token via `CLOUDFLARE_API_TOKEN` rather
+   than `wrangler login` — `login` overwrites the single global OAuth token
+   and would sign this machine out of its other Cloudflare accounts.
+
+**Gotcha:** not every wrangler subcommand honours `wrangler.toml`'s
+`account_id`. `wrangler r2 bucket list` in particular falls back to the
+account in the global OAuth config and fails with a confusing
+`Authentication error [code: 10000]` that looks like a missing token
+permission but is actually a wrong-account lookup. Export
+`CLOUDFLARE_ACCOUNT_ID` alongside the token and every subcommand agrees:
 
 ```sh
 cd backend
 bun install
 
-# Authenticate with Cloudflare (opens a browser window)
-wrangler login
+export CLOUDFLARE_API_TOKEN="$(cat ~/.cloudflare-fold-token)"
+export CLOUDFLARE_ACCOUNT_ID=3e871b0b1eb6ba48da27e2b9bd6a667d
 
-# Create the R2 bucket referenced in wrangler.toml
-wrangler r2 bucket create fold-commons-photos
+# Sanity-check you are pointed at the right account before writing anything
+wrangler whoami          # -> Cafe@thefoldsf.com's Account
+wrangler d1 list         # -> fold-commons
+wrangler r2 bucket list  # -> fold-commons
 
-# Create the D1 database referenced in wrangler.toml, then paste the
-# printed `database_id` into wrangler.toml's [[d1_databases]] block
-wrangler d1 create fold-commons
-
-# Apply the gallery table schema — once locally (wrangler dev's shadow db)
-# and once against the real deployed database
-wrangler d1 execute fold-commons --file=./schema.sql
+# Apply the schema (gallery + feedback + sig_samples) to the real database
 wrangler d1 execute fold-commons --file=./schema.sql --remote
-
-# Set the upload bearer token (prompts for a value; not stored in the repo).
-# Guards POST /photos and the moderation-only DELETE /gallery/:id.
-wrangler secret put UPLOAD_TOKEN
 
 # Ship it
 wrangler deploy
+
+# Set the moderation bearer token. Guards every moderator-only route:
+# photo review, the feedback inbox, and reading the tuning pool back.
+wrangler secret put UPLOAD_TOKEN
+```
+
+The R2 bucket and D1 database already exist (both named `fold-commons`,
+created in the dashboard), so there are no `create` steps above. If you ever
+rebuild the account from scratch, add:
+
+```sh
+wrangler r2 bucket create fold-commons
+wrangler d1 create fold-commons   # paste the printed id into wrangler.toml
 ```
 
 `wrangler deploy` prints the worker's URL, e.g.
@@ -113,11 +135,30 @@ local development but should be tightened to the real app origin (e.g.
   `{ id, status }`, 404 if no row matched.
 - `DELETE /feedback/:id` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
   204 on success, 404 if no row matched.
+- `POST /tuning` — **public, no auth.** Body `{ seed, params, ground?,
+  ink?, comment?, rating?, tuner? }`. `seed` must be a finite number and
+  `params` an object of finite numbers (the SIG_PARAMS dial values, stored
+  as JSON text so new dials need no migration); `rating` is `"up" |
+  "down" | ""`; `comment` is capped at 2000 characters and `tuner` at 120.
+  Returns the created row (201). This is how a teammate's `#tune` note
+  reaches the shared pool — the app posts here on every "Save note", on
+  top of always keeping a local copy.
+- `GET /tuning` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
+  `[{ id, tuner, seed, params, ground, ink, comment, rating, created_at },
+  ...]`, newest first, capped at 500 rows. `params` is a real JSON object
+  (parsed server-side), not a doubly-encoded string.
+- `DELETE /tuning/:id` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
+  Prunes one note from the pool. 204 on success, 404 if no row matched.
 
 Every `Bearer <UPLOAD_TOKEN>`-gated route above shares one moderator
 workflow: paste the token once into the app's hidden `#moderate` (photo
-review) or `#feedback` (bug/feature inbox) pages — it's kept in that
-browser's `localStorage`, never in shipped frontend JS.
+review), `#feedback` (bug/feature inbox), or `#tune` ("Everyone's notes"
+section) pages — it's kept in that browser's `localStorage`, never in
+shipped frontend JS.
+
+Note the asymmetry on `#tune`: *writing* a note needs no token, so any
+teammate can use the tuner, but *reading the pool back* does — the notes
+accumulate for whoever holds the token.
 
 ## Local dev
 

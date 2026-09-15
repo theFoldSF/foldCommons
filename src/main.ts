@@ -23,7 +23,16 @@ import { PHOTOS, loadPhotos, readUpload, submitPhoto } from "./photos/index";
 import { TEMPLATES } from "./templates/index";
 import { ensureArtLum, renderDoc, sigEngineParams } from "./render";
 import { fetchGalleryMerged, saveGalleryItem, removeLocalGalleryItem, type MergedGalleryItem } from "./gallery/index";
-import { loadSamples, addSample, removeSample, exportSamplesJson } from "./tuning/index";
+import {
+  loadSamples,
+  addSample,
+  removeSample,
+  exportSamplesJson,
+  pushSample,
+  fetchTeamSamples,
+  deleteTeamSample,
+  type RemoteSigSample,
+} from "./tuning/index";
 import {
   fetchPendingPhotos,
   approvePhoto,
@@ -1769,6 +1778,17 @@ function buildTuneView() {
   );
   const preview = h(`<div class="tune-preview"></div>`);
   const controls = h(`<div class="tune-controls"></div>`);
+  // Reuses the gallery's maker key, so anyone who already named themselves
+  // when publishing a flyer gets it prefilled here.
+  let savedTuner = "";
+  try {
+    savedTuner = localStorage.getItem(MAKER_KEY) ?? "";
+  } catch {
+    savedTuner = "";
+  }
+  const tunerField = h(`<div class="field"><label>Your name</label>
+    <input type="text" class="tune-tuner" placeholder="Anonymous"></div>`);
+  (tunerField.querySelector(".tune-tuner") as HTMLInputElement).value = savedTuner;
   const commentField = h(`<div class="field"><label>Comment</label>
     <textarea class="tune-comment" rows="3" placeholder="What's working, what's not..."></textarea></div>`);
   const ratingSeg = h(`<div class="seg" style="margin-bottom:10px">
@@ -1779,9 +1799,15 @@ function buildTuneView() {
     <button type="button" class="act tune-save">Save note</button>
     <button type="button" class="act ghost tune-export">Export JSON</button>
   </div>`);
-  const logHeader = h(`<h3 class="panel-title" style="margin-top:30px">Saved notes</h3>`);
+  const syncNote = h(`<div class="note tune-sync"></div>`);
+  const logHeader = h(`<h3 class="panel-title" style="margin-top:30px">Your notes</h3>`);
   const log = h(`<div class="tune-log"></div>`);
-  body.append(preview, controls, commentField, ratingSeg, actions, logHeader, log);
+  const teamHeader = h(`<h3 class="panel-title" style="margin-top:30px">Everyone's notes</h3>`);
+  const teamLog = h(`<div class="tune-log"></div>`);
+  body.append(preview, controls, tunerField, commentField, ratingSeg, actions, syncNote, logHeader, log);
+  // The pooled view is a moderator read (bearer token), so it only appears
+  // when there's a backend to read from at all.
+  if (FOLD_API) body.append(teamHeader, teamLog);
 
   let seed = Math.floor(Math.random() * 100000);
   let params = defaultSigParams();
@@ -1859,23 +1885,49 @@ function buildTuneView() {
         (s.rating === "up" ? "👍 " : s.rating === "down" ? "👎 " : "") + (s.comment || "(no comment)");
       (card.querySelector(".meta") as HTMLElement).textContent =
         `${new Date(s.createdAt).toLocaleString()} · seed ${s.seed}`;
+      const load = h(`<button type="button" class="mini">↩ Load</button>`);
+      load.onclick = () => restore(s.seed, s.params);
       const del = h(`<button type="button" class="mini">✕</button>`);
       del.onclick = () => {
         removeSample(s.id);
         renderLog();
       };
-      (card.querySelector(".body") as HTMLElement).appendChild(del);
+      (card.querySelector(".body") as HTMLElement).append(load, del);
       log.appendChild(card);
     }
   }
 
-  (actions.querySelector(".tune-save") as HTMLButtonElement).onclick = () => {
+  (actions.querySelector(".tune-save") as HTMLButtonElement).onclick = async () => {
     const commentEl = commentField.querySelector(".tune-comment") as HTMLTextAreaElement;
-    addSample({ seed, params: { ...params }, ground: TUNE_GROUND, ink: TUNE_INK, comment: commentEl.value.trim(), rating });
+    const tunerEl = tunerField.querySelector(".tune-tuner") as HTMLInputElement;
+    const tuner = tunerEl.value.trim();
+    try {
+      if (tuner) localStorage.setItem(MAKER_KEY, tuner);
+    } catch {
+      // private mode — the name just won't be prefilled next time
+    }
+    const sample = addSample({
+      seed,
+      params: { ...params },
+      ground: TUNE_GROUND,
+      ink: TUNE_INK,
+      comment: commentEl.value.trim(),
+      rating,
+    });
     commentEl.value = "";
     rating = "";
     ratingSeg.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
     renderLog();
+
+    // Local copy is already saved; the shared copy is best-effort.
+    if (FOLD_API) {
+      syncNote.textContent = "Saving to the team log...";
+      const ok = await pushSample(sample, tuner || undefined);
+      syncNote.textContent = ok
+        ? "Saved to the team log ✓"
+        : "Saved on this device only — the team log couldn't be reached.";
+      if (ok) renderTeamLog();
+    }
   };
   (actions.querySelector(".tune-export") as HTMLButtonElement).onclick = async (e) => {
     await navigator.clipboard.writeText(exportSamplesJson());
@@ -1884,9 +1936,74 @@ function buildTuneView() {
     setTimeout(() => (btn.textContent = "Export JSON"), 1400);
   };
 
+  // Everyone's notes: same bearer token as the other hidden pages. Rendered
+  // read-mostly — a moderator can prune a row, but not edit one.
+  function renderTeamLog(token?: string) {
+    if (!FOLD_API) return;
+    const go = (t: string) => {
+      teamLog.innerHTML = "";
+      teamLog.appendChild(h(`<div class="note">Loading...</div>`));
+      fetchTeamSamples(FOLD_API, t).then((res) => {
+        teamLog.innerHTML = "";
+        if (!res.ok) {
+          teamLog.appendChild(h(`<div class="note">${res.error}</div>`));
+          return;
+        }
+        if (!res.data.length) {
+          teamLog.appendChild(h(`<div class="note">No notes from the team yet.</div>`));
+          return;
+        }
+        for (const s of res.data) renderTeamCard(s, t);
+      });
+    };
+    if (token) go(token);
+    else tokenGate(teamLog, go);
+  }
+
+  function renderTeamCard(s: RemoteSigSample, token: string) {
+    const inner = SIGNATURE_ENGINE.render({
+      w: 72,
+      h: 72,
+      p: sigEngineParams(s.params),
+      colors: [],
+      ink: s.ink,
+      ground: s.ground,
+      seed: s.seed,
+    });
+    const card = h(`<div class="hp-card">
+      <div class="thumb" style="background:${s.ground}"><svg viewBox="0 0 72 72">${inner}</svg></div>
+      <div class="body">
+        <div class="hp-comment"></div>
+        <div class="meta"></div>
+      </div>
+    </div>`);
+    (card.querySelector(".hp-comment") as HTMLElement).textContent =
+      (s.rating === "up" ? "\u{1F44D} " : s.rating === "down" ? "\u{1F44E} " : "") + (s.comment || "(no comment)");
+    (card.querySelector(".meta") as HTMLElement).textContent =
+      `${s.tuner || "Anonymous"} \u00B7 ${new Date(s.created_at).toLocaleString()} \u00B7 seed ${s.seed}`;
+    const load = h(`<button type="button" class="mini">\u21A9 Load</button>`);
+    load.onclick = () => restore(s.seed, s.params);
+    const del = h(`<button type="button" class="mini">\u2715</button>`);
+    del.onclick = async () => {
+      if (await deleteTeamSample(FOLD_API!, s.id, token)) renderTeamLog(token);
+    };
+    (card.querySelector(".body") as HTMLElement).append(load, del);
+    teamLog.appendChild(card);
+  }
+
+  // Load this sample's dials back into the editor — the point of pooling the
+  // notes is being able to pick a teammate's "good" one back up.
+  function restore(sampleSeed: number, sampleParams: Record<string, number>) {
+    seed = sampleSeed;
+    params = { ...defaultSigParams(), ...sampleParams };
+    renderPreview();
+    renderControls();
+  }
+
   renderPreview();
   renderControls();
   renderLog();
+  renderTeamLog();
 }
 
 // #moderate — approve or deny photos the community submitted for the

@@ -2,19 +2,25 @@ name = "fold-commons-backend"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 
+# The Fold SF's Cloudflare account. Pinned explicitly because this machine is
+# logged into other Cloudflare accounts (Raybox, Rheome) — without this line
+# wrangler silently picks the default one and would create/deploy The Fold's
+# infrastructure in the wrong account.
+account_id = "3e871b0b1eb6ba48da27e2b9bd6a667d"
+
 # R2 bucket that stores the community photo library. Objects are keyed by
 # their generated id; w/h/name live as custom metadata (see src/index.ts).
 [[r2_buckets]]
 binding = "PHOTOS_BUCKET"
-bucket_name = "fold-commons-photos"
+bucket_name = "fold-commons"
 
-# CORS origin allowed to call this worker. "*" is fine for local dev; before
-# going to production, set this to the real fold-commons app origin, e.g.
-# "https://fold-commons.vercel.app" (either edit here and redeploy, or run
-# `wrangler secret put ALLOWED_ORIGIN` to override without a redeploy... note
-# secrets and vars both surface as env.ALLOWED_ORIGIN, so pick one place).
+# CORS origin allowed to call this worker — a single origin, not a list.
+# Set to the production app origin. Note the consequence for local dev: a
+# `bun run dev` frontend on http://localhost:5173 will be refused by CORS if
+# it points at the *deployed* worker. For local work, run the worker locally
+# too (`bun run dev` in this directory) rather than loosening this back to "*".
 [vars]
-ALLOWED_ORIGIN = "*"
+ALLOWED_ORIGIN = "https://fold-commons.vercel.app"
 
 # UPLOAD_TOKEN is a secret, not a var — never checked into wrangler.toml.
 # Set it once per environment with:
@@ -22,10 +28,10 @@ ALLOWED_ORIGIN = "*"
 # The worker reads it as env.UPLOAD_TOKEN and requires it on POST /photos
 # and DELETE /gallery/:id via `Authorization: Bearer <token>`.
 
-# D1 database backing the community gallery (see schema.sql). Create it with
-# `wrangler d1 create fold-commons`, then paste the `database_id` it prints
-# below (Jasper does this step — it talks to Cloudflare).
+# D1 database backing the community gallery, feedback inbox, and signature
+# tuning log (see schema.sql). Already created in the dashboard; paste its id
+# below — `wrangler d1 list` prints it once authenticated to this account.
 [[d1_databases]]
 binding = "DB"
 database_name = "fold-commons"
-database_id = "REPLACE_ME_AFTER_WRANGLER_D1_CREATE"
+database_id = "9fe43ccf-de76-42f0-b351-724973fe1381"

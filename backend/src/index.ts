@@ -17,6 +17,9 @@
 //   GET    /feedback           -> list reports, newest first (bearer-token guarded)
 //   PATCH  /feedback/:id       -> update a report's status (bearer-token guarded)
 //   DELETE /feedback/:id       -> remove a report (bearer-token guarded)
+//   POST   /tuning             -> log a signature tuning sample (public, no auth)
+//   GET    /tuning             -> list pooled tuning samples (bearer-token guarded)
+//   DELETE /tuning/:id         -> remove a tuning sample (bearer-token guarded)
 //   OPTIONS *                   -> CORS preflight
 //
 // See ../README.md for deploy steps.
@@ -51,6 +54,18 @@ interface FeedbackRow {
   name: string | null;
   context: string | null;
   status: string;
+  created_at: string;
+}
+
+interface SigSampleRow {
+  id: string;
+  tuner: string | null;
+  seed: number;
+  params: string;
+  ground: string;
+  ink: string;
+  comment: string | null;
+  rating: string;
   created_at: string;
 }
 
@@ -410,6 +425,100 @@ async function deleteFeedbackItem(id: string, env: Env): Promise<Response> {
   return new Response(null, { status: 204, headers: corsHeaders(env) });
 }
 
+const MAX_SIG_COMMENT_LEN = 2000;
+const MAX_SIG_TUNER_LEN = 120;
+const MAX_SIG_PARAMS_LEN = 4000;
+const SIG_RATINGS = ["up", "down", ""];
+
+// The tuning log's shareable half. Teammates POST here with no token (the
+// #tune page is hidden but unauthenticated, same as the public feedback
+// form); only a moderator can read the pool back or prune it.
+async function submitSigSample(request: Request, env: Env): Promise<Response> {
+  let body: {
+    seed?: unknown;
+    params?: unknown;
+    ground?: unknown;
+    ink?: unknown;
+    comment?: unknown;
+    rating?: unknown;
+    tuner?: unknown;
+  };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, env, { status: 400 });
+  }
+
+  const seed = typeof body.seed === "number" && Number.isFinite(body.seed) ? Math.trunc(body.seed) : null;
+  if (seed === null) {
+    return json({ error: "'seed' must be a finite number" }, env, { status: 400 });
+  }
+
+  // params is the SIG_PARAMS dial set — an object of finite numbers. Stored
+  // as JSON text (same approach as gallery.doc) so new dials don't need a
+  // migration.
+  const rawParams = body.params;
+  if (typeof rawParams !== "object" || rawParams === null || Array.isArray(rawParams)) {
+    return json({ error: "'params' must be an object" }, env, { status: 400 });
+  }
+  for (const [k, v] of Object.entries(rawParams as Record<string, unknown>)) {
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      return json({ error: `'params.${k}' must be a finite number` }, env, { status: 400 });
+    }
+  }
+  const params = JSON.stringify(rawParams);
+  if (params.length > MAX_SIG_PARAMS_LEN) {
+    return json({ error: `'params' exceeds ${MAX_SIG_PARAMS_LEN} serialized characters` }, env, { status: 400 });
+  }
+
+  const ground = typeof body.ground === "string" && body.ground.trim() ? body.ground.trim().slice(0, 32) : "#FFF9F1";
+  const ink = typeof body.ink === "string" && body.ink.trim() ? body.ink.trim().slice(0, 32) : "#03071B";
+  const comment =
+    typeof body.comment === "string" && body.comment.trim()
+      ? body.comment.trim().slice(0, MAX_SIG_COMMENT_LEN)
+      : null;
+  const rating = typeof body.rating === "string" && SIG_RATINGS.includes(body.rating) ? body.rating : "";
+  const tuner =
+    typeof body.tuner === "string" && body.tuner.trim() ? body.tuner.trim().slice(0, MAX_SIG_TUNER_LEN) : null;
+
+  const id = crypto.randomUUID();
+  const created_at = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO sig_samples (id, tuner, seed, params, ground, ink, comment, rating, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  )
+    .bind(id, tuner, seed, params, ground, ink, comment, rating, created_at)
+    .run();
+
+  return json({ id, tuner, seed, params: rawParams, ground, ink, comment, rating, created_at }, env, { status: 201 });
+}
+
+async function listSigSamples(env: Env): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT id, tuner, seed, params, ground, ink, comment, rating, created_at FROM sig_samples ORDER BY created_at DESC LIMIT 500"
+  ).all<SigSampleRow>();
+  // params comes back as JSON text; hand the frontend a real object, the
+  // same way listGallery unwraps `doc`.
+  const rows = (results ?? []).map((r) => ({
+    ...r,
+    params: (() => {
+      try {
+        return JSON.parse(r.params);
+      } catch {
+        return {};
+      }
+    })(),
+  }));
+  return json(rows, env);
+}
+
+async function deleteSigSample(id: string, env: Env): Promise<Response> {
+  const { meta } = await env.DB.prepare("DELETE FROM sig_samples WHERE id = ?").bind(id).run();
+  if (!meta.changes) {
+    return json({ error: "Not found" }, env, { status: 404 });
+  }
+  return new Response(null, { status: 204, headers: corsHeaders(env) });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -470,6 +579,18 @@ export default {
       if (feedbackMatch && request.method === "DELETE") {
         if (!isAuthorized(request, env)) return json({ error: "Unauthorized" }, env, { status: 401 });
         return await deleteFeedbackItem(decodeURIComponent(feedbackMatch[1]), env);
+      }
+      if (url.pathname === "/tuning" && request.method === "POST") {
+        return await submitSigSample(request, env);
+      }
+      if (url.pathname === "/tuning" && request.method === "GET") {
+        if (!isAuthorized(request, env)) return json({ error: "Unauthorized" }, env, { status: 401 });
+        return await listSigSamples(env);
+      }
+      const tuningMatch = url.pathname.match(/^\/tuning\/([^/]+)$/);
+      if (tuningMatch && request.method === "DELETE") {
+        if (!isAuthorized(request, env)) return json({ error: "Unauthorized" }, env, { status: 401 });
+        return await deleteSigSample(decodeURIComponent(tuningMatch[1]), env);
       }
       return json({ error: "Not found" }, env, { status: 404 });
     } catch (err) {

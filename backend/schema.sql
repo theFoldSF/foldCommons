@@ -20,3 +20,17 @@ CREATE TABLE IF NOT EXISTS feedback (
   status TEXT NOT NULL DEFAULT 'new', -- 'new' | 'done'
   created_at TEXT NOT NULL     -- ISO 8601
 );
+
+CREATE TABLE IF NOT EXISTS sig_samples (
+  id TEXT PRIMARY KEY,
+  tuner TEXT,                  -- who left the note (free text, may be NULL)
+  seed INTEGER NOT NULL,
+  params TEXT NOT NULL,        -- JSON text: the SIG_PARAMS dial values
+  ground TEXT NOT NULL,        -- hex the sample was previewed on
+  ink TEXT NOT NULL,
+  comment TEXT,
+  rating TEXT NOT NULL DEFAULT '', -- 'up' | 'down' | ''
+  created_at TEXT NOT NULL     -- ISO 8601
+);
+
+CREATE INDEX IF NOT EXISTS sig_samples_created_at ON sig_samples (created_at DESC);
