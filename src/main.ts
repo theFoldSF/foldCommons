@@ -14,7 +14,7 @@ import {
   FACES,
   type RegisterKey,
 } from "./brand/tokens";
-import { loadFonts } from "./brand/fonts";
+import { loadFonts, fontFamilyCss } from "./brand/fonts";
 import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById } from "./engines/index";
 import { loadCutouts } from "./cutouts/index";
 import { FRAMES, PLATE_FRAMES } from "./frames/index";
@@ -89,6 +89,7 @@ const LOCK_LABELS: Record<LockKey, string> = {
   motif: "Motif",
   signature: "Signature",
 };
+if (LOCK_KEYS.some((k) => !LOCK_LABELS[k])) throw new Error("LOCK_LABELS out of sync with LOCK_KEYS");
 import { exportPng, exportSvg } from "./export";
 
 loadFonts();
@@ -186,7 +187,9 @@ function buildLeft() {
     leftPanel.appendChild(card);
   }
 
-  leftPanel.appendChild(h(`<h3 class="panel-title">Ground</h3>`));
+  const groundHead = h(`<div class="panel-head-row"><h3 class="panel-title">Ground</h3></div>`);
+  groundHead.appendChild(lockToggle("groundRegister"));
+  leftPanel.appendChild(groundHead);
   const gchips = h(`<div class="chips"></div>`);
   GROUNDS.forEach((g, i) => {
     const c = h(
@@ -223,6 +226,45 @@ function buildLeft() {
   leftPanel.scrollTop = scrollY;
 }
 
+// --- shuffle locks -----------------------------------------------------------
+// A lock lives next to the control it governs rather than in one list, so the
+// question "will shuffle touch this?" is answered where you're already looking.
+// Toggling repaints just the button: locks only steer shuffleComp(), so there
+// is nothing to re-render, and rebuilding the panel here would collapse
+// sections and lose scroll position.
+function lockToggle(key: LockKey): HTMLButtonElement {
+  const btn = h(`<button type="button" class="lock-btn"></button>`) as HTMLButtonElement;
+  const paint = () => {
+    const on = !!doc.comp.locks?.[key];
+    btn.classList.toggle("on", on);
+    btn.textContent = on ? "🔒" : "🔓";
+    const label = LOCK_LABELS[key];
+    btn.title = on
+      ? `${label} is locked — shuffle leaves it alone`
+      : `Lock ${label} so shuffle leaves it alone`;
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-pressed", String(on));
+  };
+  btn.onclick = (e) => {
+    // Section headers are themselves buttons; without this a lock click would
+    // also collapse the section it sits in.
+    e.preventDefault();
+    e.stopPropagation();
+    doc.comp.locks = { ...(doc.comp.locks ?? {}), [key]: !doc.comp.locks?.[key] };
+    paint();
+  };
+  paint();
+  return btn;
+}
+
+// A .field whose label row carries its own lock. Returns the .field itself, so
+// callers keep appending their controls to it exactly as before.
+function lockedField(text: string, key: LockKey): HTMLElement {
+  const field = h(`<div class="field"><div class="field-head"><label>${text}</label></div></div>`);
+  (field.querySelector(".field-head") as HTMLElement).appendChild(lockToggle(key));
+  return field;
+}
+
 // --- right panel: contextual controls ---------------------------------------
 
 // --- composed-template panels ------------------------------------------------
@@ -238,20 +280,7 @@ function compControls(into: HTMLElement) {
   };
   into.appendChild(shuffle);
 
-  const lockRow = h(`<div class="field"><label>🔒 Lock from shuffle</label></div>`);
-  const lockSeg = h(`<div class="seg wrap"></div>`);
-  for (const key of LOCK_KEYS) {
-    const on = !!doc.comp.locks?.[key];
-    const b = h(`<button class="${on ? "active" : ""}">${on ? "🔒" : "🔓"} ${LOCK_LABELS[key]}</button>`);
-    b.onclick = () => {
-      doc.comp.locks = { ...(doc.comp.locks ?? {}), [key]: !on };
-      buildRight();
-    };
-    lockSeg.appendChild(b);
-  }
-  lockRow.appendChild(lockSeg);
-  into.appendChild(lockRow);
-
+  const layoutField = lockedField("Layout", "layout");
   const cards = h(`<div class="layout-grid"></div>`);
   for (const l of LAYOUTS) {
     const b = h(
@@ -265,9 +294,10 @@ function compControls(into: HTMLElement) {
     };
     cards.appendChild(b);
   }
-  into.appendChild(cards);
+  layoutField.appendChild(cards);
+  into.appendChild(layoutField);
 
-  const frameRow = h(`<div class="field"><label>Frame shape</label></div>`);
+  const frameRow = lockedField("Frame shape", "frame");
   const seg = h(`<div class="seg wrap"></div>`);
   for (const f of FRAMES) {
     const b = h(`<button class="${doc.comp.frame === f.id ? "active" : ""}">${f.label}</button>`);
@@ -288,7 +318,7 @@ function compControls(into: HTMLElement) {
   into.appendChild(frameRow);
 
   if (doc.comp.layout === "panel") {
-    const f = h(`<div class="field"><label>Panel color</label></div>`);
+    const f = lockedField("Panel color", "panelAccent");
     f.appendChild(
       accentChips(doc.comp.panelAccent, {}, (idx) => {
         doc.comp.panelAccent = idx;
@@ -300,7 +330,7 @@ function compControls(into: HTMLElement) {
   }
 
   if (doc.comp.layout === "backdrop" || doc.comp.layout === "collage") {
-    const f = h(`<div class="field"><label>Arrange</label></div>`);
+    const f = lockedField("Arrange", "arrange");
     const aseg = h(`<div class="seg wrap"></div>`);
     ARRANGE_LABELS.forEach((label, i) => {
       const b = h(`<button class="${doc.comp.arrange === i ? "active" : ""}">${label}</button>`);
@@ -550,7 +580,7 @@ function composedWordControls(into: HTMLElement) {
     { key: "scallop", label: "Scallop" },
     { key: "line", label: "Line" },
   ];
-  const cf = h(`<div class="field"><label>Chip style</label></div>`);
+  const cf = lockedField("Chip style", "chips");
   const cseg = h(`<div class="seg"></div>`);
   for (const cs of chipDefs) {
     const b = h(`<button class="${doc.comp.chipStyle === cs.key ? "active" : ""}">${cs.label}</button>`);
@@ -567,7 +597,7 @@ function composedWordControls(into: HTMLElement) {
   // the title's contrast plate can take any frame shape — same set as
   // photo/motif/text-box frames (a plate only actually shows over full-bleed
   // art in the "corners"/"stack" words layouts; harmless to set otherwise)
-  const tf = h(`<div class="field"><label>Title frame</label></div>`);
+  const tf = lockedField("Title frame", "titlePlate");
   const tfSeg = h(`<div class="seg wrap"></div>`);
   for (const f of PLATE_FRAMES) {
     const b = h(`<button class="${doc.comp.titleFrame === f.id ? "active" : ""}">${f.label}</button>`);
@@ -1542,15 +1572,25 @@ function setSectionOpen(key: string, open: boolean) {
 // kind, nothing applicable right now) renders no header at all instead of an
 // empty disclosure. Non-empty content gets a clickable title+chevron header;
 // open state persists per `key` and animates via a plain max-height transition.
-function section(into: HTMLElement, key: string, title: string, defaultOpen: boolean, build: (body: HTMLElement) => void) {
+function section(
+  into: HTMLElement,
+  key: string,
+  title: string,
+  defaultOpen: boolean,
+  build: (body: HTMLElement) => void,
+  lockKey?: LockKey
+) {
   const scratch = document.createElement("div");
   build(scratch);
   if (!scratch.childNodes.length) return;
   const isOpen = sectionOpen(key, defaultOpen);
   const wrap = h(`<div class="panel-section${isOpen ? " open" : ""}">
-    <button type="button" class="panel-section-head"><h3 class="panel-title">${title}</h3><span class="chev">›</span></button>
+    <div class="panel-section-head-row">
+      <button type="button" class="panel-section-head"><h3 class="panel-title">${title}</h3><span class="chev">›</span></button>
+    </div>
     <div class="panel-section-body"><div class="panel-section-inner"></div></div>
   </div>`);
+  if (lockKey) (wrap.querySelector(".panel-section-head-row") as HTMLElement).appendChild(lockToggle(lockKey));
   const inner = wrap.querySelector(".panel-section-inner") as HTMLElement;
   inner.append(...Array.from(scratch.childNodes));
   into.appendChild(wrap);
@@ -1586,13 +1626,13 @@ function buildRight() {
   const scrollY = rightPanel.scrollTop;
   rightPanel.innerHTML = "";
   section(rightPanel, "composition", "Composition", true, compControls);
-  section(rightPanel, "photo", "Photo", false, photoLibraryControls);
-  section(rightPanel, "bg", "Background texture", false, bgTextureControls);
+  section(rightPanel, "photo", "Photo", false, photoLibraryControls, "photo");
+  section(rightPanel, "bg", "Background texture", false, bgTextureControls, "bg");
   section(rightPanel, "palette", "Palette lab (temporary)", false, paletteLabControls);
-  section(rightPanel, "words", "Words", true, fieldControls);
+  section(rightPanel, "words", "Words", true, fieldControls, "words");
   section(rightPanel, "texts", "Text boxes", true, textBoxesControls);
-  section(rightPanel, "signature", "Signature · F·O·L·D net", true, sigControls);
-  section(rightPanel, "motif", "Motif", true, motifControls);
+  section(rightPanel, "signature", "Signature · F·O·L·D net", true, sigControls, "signature");
+  section(rightPanel, "motif", "Motif", true, motifControls, "motif");
   section(rightPanel, "line", "The Line", true, lineControls);
   section(rightPanel, "diagram", "Diagram", true, diagramControls);
   section(rightPanel, "marks", "Marks", true, stickerControls);
@@ -1692,7 +1732,7 @@ function buildCanon() {
     <h2>Typography</h2>
     ${FACES.map(
       (f) =>
-        `<p class="face-demo" style="font-family:${f.name === "Fira Code" ? "'Fira Code',monospace" : f.name === "Fraunces" ? "'Fraunces',serif" : `'${f.name}',sans-serif`};font-weight:${f.weight}">${f.name} ${f.weight} — the Fold, a gathering place <span class="pill">${f.role}${f.standInFor ? ` · stand-in for ${f.standInFor}` : ""}</span></p>`
+        `<p class="face-demo" style="font-family:${fontFamilyCss(f.name)};font-weight:${f.weight}">${f.name} ${f.weight} — the Fold, a gathering place <span class="pill">${f.role}${f.standInFor ? ` · stand-in for ${f.standInFor}` : ""}${f.trial ? " · trial, local only" : ""}</span></p>`
     ).join("")}
     <p>The deck's type system is Denim (semi-bold and regular) with Fira Code for
     numerals, urls, dates, and times, plus a chunky soft display face for the biggest

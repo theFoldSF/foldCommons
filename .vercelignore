@@ -1,0 +1,11 @@
+# Vercel uses this instead of .gitignore when present, so it must cover
+# everything .gitignore does, plus the trial fonts.
+node_modules/
+dist/
+.env
+.env*
+.vercel/
+.vercel
+
+# Trial-licensed Denim — evaluation only, must never reach a public URL.
+public/fonts/denim-trial/

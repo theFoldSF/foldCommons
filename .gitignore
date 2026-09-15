@@ -4,3 +4,6 @@ dist/
 .vercel/
 .vercel
 .env*
+
+# Trial-licensed Denim (evaluation only — never commit or deploy)
+public/fonts/denim-trial/

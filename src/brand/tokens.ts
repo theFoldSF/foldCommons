@@ -160,14 +160,25 @@ export const SEASONS: Season[] = [
 export type TypeRole = "display" | "heading" | "body" | "mono";
 
 export interface Face {
-  name: string; // Google Fonts family
+  name: string; // Google Fonts family, unless `local`
   weight: number;
   role: TypeRole;
   standInFor?: string;
+  // Self-hosted rather than fetched from Google Fonts — skipped by css2Url().
+  local?: boolean;
+  // Trial-licensed: present only on a machine that has the trial files, and
+  // deliberately excluded from git and from any deploy. The CSS stacks list
+  // the OFL stand-in right behind it, so its absence is a silent fallback.
+  trial?: boolean;
 }
 
 export const FACES: Face[] = [
   { name: "Fraunces", weight: 900, role: "display", standInFor: "deck display (chunky soft slab)" },
+  // Denim is the chosen text face and is being evaluated from its trial files
+  // while licensing is finalized. Figtree stays listed directly behind it:
+  // it is what actually renders anywhere the trial files are absent.
+  { name: "Denim", weight: 600, role: "heading", local: true, trial: true },
+  { name: "Denim", weight: 400, role: "body", local: true, trial: true },
   { name: "Figtree", weight: 600, role: "heading", standInFor: "Denim semi-bold" },
   { name: "Figtree", weight: 400, role: "body", standInFor: "Denim regular" },
   { name: "Fira Code", weight: 450, role: "mono" },
