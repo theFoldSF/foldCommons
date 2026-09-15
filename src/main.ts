@@ -12,15 +12,29 @@ import {
   SEASONS,
   TYPE_RULES,
   FACES,
+  COLOR,
+  COLOR_KEYS,
+  resolveColors,
   type RegisterKey,
+  type ColorKey,
+  type Palette,
 } from "./brand/tokens";
 import { loadFonts, fontFamilyCss } from "./brand/fonts";
+import {
+  listPalettes as fetchTeamPalettes,
+  createPalette as saveTeamPalette,
+  updatePalette as updateTeamPalette,
+  deletePalette as deleteTeamPalette,
+  canEdit as canEditPalette,
+  apiBase as paletteApiBase,
+  type TeamPalette,
+} from "./palettes/index";
 import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById } from "./engines/index";
 import { loadCutouts } from "./cutouts/index";
 import { FRAMES, PLATE_FRAMES } from "./frames/index";
 import { MARKS, loadMarks } from "./marks/index";
 import { PHOTOS, loadPhotos, readUpload, submitPhoto } from "./photos/index";
-import { TEMPLATES } from "./templates/index";
+import { TEMPLATES, CUSTOM_MIN, CUSTOM_MAX, clampCustomSize } from "./templates/index";
 import { ensureArtLum, renderDoc, sigEngineParams } from "./render";
 import { fetchGalleryMerged, saveGalleryItem, removeLocalGalleryItem, type MergedGalleryItem } from "./gallery/index";
 import {
@@ -54,6 +68,8 @@ import {
   decodeDoc,
   defaultSigParams,
   docAccents,
+  docColors,
+  docGrounds,
   docGround,
   docTemplate,
   encodeDoc,
@@ -126,15 +142,15 @@ function h(html: string): HTMLElement {
   return t.content.firstElementChild as HTMLElement;
 }
 
-// Color chips constrained to the active register's accents (+ ink option) —
-// or a palette-lab override when one is set, so a chip's on-screen color
-// always matches what docAccent(doc, i) actually renders at that index.
+// Color chips constrained to the active register's accents (+ ink option),
+// resolved through the doc's tuned palette so a chip's on-screen color always
+// matches what docAccent(doc, i) actually renders at that index.
 function accentChips(
   current: number | undefined,
   opts: { allowInk?: boolean },
   onPick: (idx: number) => void
 ): HTMLElement {
-  const reg = REGISTERS[doc.register];
+  const reg = { ink: docColors(doc).ink };
   const accents = docAccents(doc);
   const wrap = h(`<div class="chips"></div>`);
   if (opts.allowInk) {
@@ -187,11 +203,13 @@ function buildLeft() {
     leftPanel.appendChild(card);
   }
 
+  if (doc.template === "custom") buildCustomSizeRow(leftPanel);
+
   const groundHead = h(`<div class="panel-head-row"><h3 class="panel-title">Ground</h3></div>`);
   groundHead.appendChild(lockToggle("groundRegister"));
   leftPanel.appendChild(groundHead);
   const gchips = h(`<div class="chips"></div>`);
-  GROUNDS.forEach((g, i) => {
+  docGrounds(doc).forEach((g, i) => {
     const c = h(
       `<button class="chip ${doc.ground === i ? "active" : ""}" style="background:${g.hex}" title="${g.label}"></button>`
     );
@@ -203,6 +221,7 @@ function buildLeft() {
     gchips.appendChild(c);
   });
   leftPanel.appendChild(gchips);
+  buildPaletteRow(leftPanel);
 
   if (!docTemplate(doc).composed) {
     leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
@@ -263,6 +282,306 @@ function lockedField(text: string, key: LockKey): HTMLElement {
   const field = h(`<div class="field"><div class="field-head"><label>${text}</label></div></div>`);
   (field.querySelector(".field-head") as HTMLElement).appendChild(lockToggle(key));
   return field;
+}
+
+// The custom template's canvas dimensions. Committed on change/Enter rather
+// than on every keystroke, so a half-typed "10" doesn't clamp itself to the
+// minimum and fight the member mid-edit.
+function buildCustomSizeRow(into: HTMLElement) {
+  const t = docTemplate(doc);
+  const field = h(`<div class="field" style="margin-top:14px"><label>Canvas size (px)</label>
+    <div class="row size-row">
+      <input type="number" class="cs-w" min="${CUSTOM_MIN}" max="${CUSTOM_MAX}" step="1">
+      <span class="cs-x mono">×</span>
+      <input type="number" class="cs-h" min="${CUSTOM_MIN}" max="${CUSTOM_MAX}" step="1">
+    </div></div>`);
+  const wIn = field.querySelector(".cs-w") as HTMLInputElement;
+  const hIn = field.querySelector(".cs-h") as HTMLInputElement;
+  wIn.value = String(t.w);
+  hIn.value = String(t.h);
+  const commit = () => {
+    const size = clampCustomSize(Number(wIn.value), Number(hIn.value));
+    doc.customSize = size;
+    wIn.value = String(size.w);
+    hIn.value = String(size.h);
+    buildAll();
+  };
+  for (const el of [wIn, hIn]) {
+    el.onchange = commit;
+    el.onkeydown = (e) => {
+      if ((e as KeyboardEvent).key === "Enter") commit();
+    };
+  }
+  into.appendChild(field);
+
+  const presets: { label: string; w: number; h: number }[] = [
+    { label: "Square", w: 1080, h: 1080 },
+    { label: "Story", w: 1080, h: 1920 },
+    { label: "A4", w: 1240, h: 1754 },
+    { label: "Wide", w: 1920, h: 1080 },
+  ];
+  const seg = h(`<div class="seg wrap" style="margin-top:6px"></div>`);
+  for (const p of presets) {
+    const b = h(`<button class="${t.w === p.w && t.h === p.h ? "active" : ""}">${p.label}</button>`);
+    b.onclick = () => {
+      doc.customSize = { w: p.w, h: p.h };
+      buildAll();
+    };
+    seg.appendChild(b);
+  }
+  into.appendChild(seg);
+}
+
+// --- team palettes ------------------------------------------------------------
+
+// Palettes live on the backend and are shared, so with no API configured there
+// is nothing to tune or pick and this whole row stays out of the panel.
+let paletteCache: TeamPalette[] | null = null;
+
+function buildPaletteRow(into: HTMLElement) {
+  if (!paletteApiBase()) return;
+
+  const head = h(`<div class="panel-head-row" style="margin-top:22px">
+    <h3 class="panel-title">Palette</h3></div>`);
+  into.appendChild(head);
+
+  const openBtn = h(`<button class="act ghost" style="width:100%">🎨 Palette tuner</button>`);
+  openBtn.onclick = () => buildPaletteView();
+  into.appendChild(openBtn);
+
+  const picker = h(`<div class="palette-picker"></div>`);
+  into.appendChild(picker);
+
+  const paint = (list: TeamPalette[]) => {
+    picker.innerHTML = "";
+    const canonBtn = h(
+      `<button class="pal-chip ${doc.comp.palette ? "" : "active"}">
+        <span class="pal-dots">${paletteDots(null)}</span><span class="pal-name">Canon</span></button>`
+    );
+    canonBtn.onclick = () => {
+      doc.comp.palette = undefined;
+      buildAll();
+    };
+    picker.appendChild(canonBtn);
+    for (const p of list) {
+      const b = h(
+        `<button class="pal-chip ${doc.comp.palette?.id === p.id ? "active" : ""}">
+          <span class="pal-dots">${paletteDots(p)}</span><span class="pal-name"></span></button>`
+      );
+      (b.querySelector(".pal-name") as HTMLElement).textContent = p.name;
+      b.title = p.maker ? `${p.name} — by ${p.maker}` : p.name;
+      b.onclick = () => {
+        // Colors travel inline on the doc, so a gallery entry or share link
+        // still renders correctly if this palette is later deleted.
+        doc.comp.palette = { id: p.id, name: p.name, colors: p.colors };
+        buildAll();
+      };
+      picker.appendChild(b);
+    }
+    if (!list.length) {
+      picker.appendChild(h(`<div class="note" style="margin-top:6px">No team palettes yet.</div>`));
+    }
+  };
+
+  if (paletteCache) paint(paletteCache);
+  else {
+    picker.appendChild(h(`<div class="note" style="margin-top:6px">Loading palettes…</div>`));
+    fetchTeamPalettes().then((list) => {
+      paletteCache = list;
+      paint(list);
+    });
+  }
+}
+
+// A palette's five most legible slots as dots, so the picker is scannable
+// without reading names.
+function paletteDots(p: TeamPalette | null): string {
+  const c = resolveColors(p?.colors);
+  return (["cream", "orange", "pink", "sky", "ink"] as ColorKey[])
+    .map((k) => `<i style="background:${c[k]}"></i>`)
+    .join("");
+}
+
+// #palette — the tuner. Every canon slot is editable; the preview underneath
+// is the real thing, a live doc render, so a change is judged in situ rather
+// than against a row of swatches.
+function buildPaletteView() {
+  const { body, overlay } = hiddenPageShell(
+    "Palette tuner",
+    "Tune the canon colors and save the result for the team. Every ground, accent, chip and motif derives from these ten slots."
+  );
+
+  let editing: TeamPalette | null = null;
+  let working: Palette = {};
+  let name = "";
+
+  const nameField = h(`<div class="field"><label>Palette name</label>
+    <input type="text" class="pal-name-input" placeholder="e.g. Late summer"></div>`);
+  const slots = h(`<div class="pal-slots"></div>`);
+  const preview = h(`<div class="pal-preview"></div>`);
+  const actions = h(`<div class="row" style="margin-top:14px"></div>`);
+  const status = h(`<div class="note pal-status"></div>`);
+  const listHeader = h(`<h3 class="panel-title" style="margin-top:30px">Team palettes</h3>`);
+  const list = h(`<div class="pal-list"></div>`);
+  body.append(nameField, slots, preview, actions, status, listHeader, list);
+
+  const nameInput = nameField.querySelector(".pal-name-input") as HTMLInputElement;
+  nameInput.oninput = () => {
+    name = nameInput.value;
+  };
+
+  function renderSlots() {
+    const c = resolveColors(working);
+    slots.innerHTML = "";
+    for (const key of COLOR_KEYS) {
+      const cell = h(`<div class="pal-slot">
+        <input type="color" value="${c[key]}">
+        <div class="pal-slot-meta"><div class="l"></div><div class="hx mono"></div></div>
+        <button class="mini pal-reset" title="Back to canon">↺</button>
+      </div>`);
+      (cell.querySelector(".l") as HTMLElement).textContent = COLOR[key].name;
+      const hx = cell.querySelector(".hx") as HTMLElement;
+      hx.textContent = c[key];
+      const input = cell.querySelector("input") as HTMLInputElement;
+      input.oninput = () => {
+        working = { ...working, [key]: input.value };
+        hx.textContent = input.value;
+        renderPreview();
+      };
+      (cell.querySelector(".pal-reset") as HTMLButtonElement).onclick = () => {
+        const next = { ...working };
+        delete next[key];
+        working = next;
+        renderSlots();
+        renderPreview();
+      };
+      slots.appendChild(cell);
+    }
+  }
+
+  // Render the member's actual current doc under the working palette — the
+  // point is seeing the palette on real work, not on a swatch strip.
+  function renderPreview() {
+    const probe: Doc = JSON.parse(JSON.stringify(doc));
+    probe.comp.palette = Object.keys(working).length ? { colors: working } : undefined;
+    preview.innerHTML = `<div class="pal-preview-inner">${renderDoc(probe)}</div>`;
+  }
+
+  function resetEditor() {
+    editing = null;
+    working = {};
+    name = "";
+    nameInput.value = "";
+    renderSlots();
+    renderPreview();
+    renderActions();
+  }
+
+  function renderActions() {
+    actions.innerHTML = "";
+    const save = h(`<button class="act">${editing ? "Save changes" : "Save palette"}</button>`);
+    save.onclick = async () => {
+      const trimmed = name.trim();
+      if (!trimmed) {
+        status.textContent = "Give the palette a name first.";
+        return;
+      }
+      if (!Object.keys(working).length) {
+        status.textContent = "Change at least one color before saving.";
+        return;
+      }
+      status.textContent = "Saving…";
+      const ok = editing
+        ? await updateTeamPalette(editing.id, trimmed, working)
+        : !!(await saveTeamPalette(trimmed, working, makerName()));
+      status.textContent = ok ? "Saved ✓" : "Couldn't save — the backend didn't accept it.";
+      if (ok) {
+        paletteCache = await fetchTeamPalettes();
+        renderList();
+        buildLeft();
+        if (!editing) resetEditor();
+      }
+    };
+    const useIt = h(`<button class="act ghost">Use without saving</button>`);
+    useIt.onclick = () => {
+      doc.comp.palette = Object.keys(working).length ? { colors: working } : undefined;
+      buildAll();
+      overlay.remove();
+      history.replaceState(null, "", location.pathname + location.search);
+    };
+    const clear = h(`<button class="act ghost">${editing ? "Cancel edit" : "Reset"}</button>`);
+    clear.onclick = resetEditor;
+    actions.append(save, useIt, clear);
+  }
+
+  function renderList() {
+    list.innerHTML = "";
+    const items = paletteCache ?? [];
+    if (!items.length) {
+      list.appendChild(h(`<div class="note">Nothing saved yet — tune the slots above and save.</div>`));
+      return;
+    }
+    for (const p of items) {
+      const card = h(`<div class="hp-card pal-card">
+        <div class="pal-dots big">${paletteDots(p)}</div>
+        <div class="body"><div class="hp-comment"></div><div class="meta"></div></div>
+      </div>`);
+      (card.querySelector(".hp-comment") as HTMLElement).textContent = p.name;
+      (card.querySelector(".meta") as HTMLElement).textContent =
+        `${p.maker || "Anonymous"} · ${new Date(p.created_at).toLocaleDateString()}`;
+      const holder = card.querySelector(".body") as HTMLElement;
+      const use = h(`<button type="button" class="mini">Use</button>`);
+      use.onclick = () => {
+        doc.comp.palette = { id: p.id, name: p.name, colors: p.colors };
+        buildAll();
+        overlay.remove();
+        history.replaceState(null, "", location.pathname + location.search);
+      };
+      holder.appendChild(use);
+      // Edit/delete only for palettes made in this browser — the edit_key
+      // never leaves the machine that created them.
+      if (canEditPalette(p.id)) {
+        const edit = h(`<button type="button" class="mini">Edit</button>`);
+        edit.onclick = () => {
+          editing = p;
+          working = { ...p.colors };
+          name = p.name;
+          nameInput.value = p.name;
+          renderSlots();
+          renderPreview();
+          renderActions();
+          status.textContent = `Editing "${p.name}".`;
+        };
+        const del = h(`<button type="button" class="mini">✕</button>`);
+        del.onclick = async () => {
+          if (!(await deleteTeamPalette(p.id))) {
+            status.textContent = "Couldn't delete that one.";
+            return;
+          }
+          if (doc.comp.palette?.id === p.id) doc.comp.palette = undefined;
+          paletteCache = await fetchTeamPalettes();
+          renderList();
+          buildLeft();
+          renderCanvas();
+        };
+        holder.append(edit, del);
+      }
+      list.appendChild(card);
+    }
+  }
+
+  // Seed the editor from whatever the doc is already using, so opening the
+  // tuner continues the current look rather than starting from canon.
+  if (doc.comp.palette?.colors) {
+    working = { ...doc.comp.palette.colors };
+    name = doc.comp.palette.name ?? "";
+    nameInput.value = name;
+  }
+  renderSlots();
+  renderPreview();
+  renderActions();
+  renderList();
+  if (!paletteCache) fetchTeamPalettes().then((l) => { paletteCache = l; renderList(); });
 }
 
 // --- right panel: contextual controls ---------------------------------------
@@ -409,59 +728,6 @@ function photoLibraryControls(into: HTMLElement) {
 // Palette lab — a temporary, explicitly non-canon tool for dialing accent
 // colors while the design team settles on them. Overrides the active
 // register's accent list on this doc only; "Reset to canon" removes it.
-function paletteLabControls(into: HTMLElement) {
-  if (!docTemplate(doc).composed) return;
-  into.appendChild(
-    h(`<div class="note">Temporary — for dialing in the palette while the team decides.
-      Not canon. Colors picked here save with this doc (gallery, share links)
-      but don't change the brand.</div>`)
-  );
-  const swatches = h(`<div class="palette-swatches"></div>`);
-  const accents = docAccents(doc);
-  accents.forEach((hex, i) => {
-    const cell = h(`<div class="palette-swatch">
-      <input type="color" value="${hex}">
-      <button class="mini rm" title="Remove">✕</button>
-    </div>`);
-    const input = cell.querySelector("input") as HTMLInputElement;
-    input.oninput = () => {
-      const next = [...accents];
-      next[i] = input.value;
-      doc.comp.paletteOverride = { accents: next };
-      renderCanvas();
-    };
-    // Other panels (date/time chip pickers, diagram node tints) render their
-    // own swatches from this same list — refresh them once the color is
-    // settled, rather than on every drag tick of the native color picker.
-    input.onchange = () => buildRight();
-    (cell.querySelector(".rm") as HTMLButtonElement).onclick = () => {
-      if (accents.length <= 2) return;
-      doc.comp.paletteOverride = { accents: accents.filter((_, j) => j !== i) };
-      buildRight();
-      renderCanvas();
-    };
-    swatches.appendChild(cell);
-  });
-  into.appendChild(swatches);
-
-  const row = h(`<div class="row" style="margin-top:10px"></div>`);
-  const add = h(`<button class="mini">+ Add color</button>`);
-  add.onclick = () => {
-    if (accents.length >= 8) return;
-    doc.comp.paletteOverride = { accents: [...accents, "#888888"] };
-    buildRight();
-    renderCanvas();
-  };
-  const reset = h(`<button class="mini">Reset to canon</button>`);
-  reset.onclick = () => {
-    delete doc.comp.paletteOverride;
-    buildRight();
-    renderCanvas();
-  };
-  row.append(add, reset);
-  into.appendChild(row);
-}
-
 function bgTextureControls(into: HTMLElement) {
   const t = docTemplate(doc);
   if (!t.composed) return;
@@ -968,6 +1234,16 @@ function exportControls(into: HTMLElement) {
 // --- save-to-gallery modal ----------------------------------------------------
 
 const MAKER_KEY = "foldCommons.maker";
+
+// The name this browser last published under, reused so a saved palette is
+// attributed without asking again.
+function makerName(): string | undefined {
+  try {
+    return localStorage.getItem(MAKER_KEY)?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function openSaveModal(saveB: HTMLElement) {
   let savedMaker = "";
@@ -1628,7 +1904,6 @@ function buildRight() {
   section(rightPanel, "composition", "Composition", true, compControls);
   section(rightPanel, "photo", "Photo", false, photoLibraryControls, "photo");
   section(rightPanel, "bg", "Background texture", false, bgTextureControls, "bg");
-  section(rightPanel, "palette", "Palette lab (temporary)", false, paletteLabControls);
   section(rightPanel, "words", "Words", true, fieldControls, "words");
   section(rightPanel, "texts", "Text boxes", true, textBoxesControls);
   section(rightPanel, "signature", "Signature · F·O·L·D net", true, sigControls, "signature");
@@ -2251,6 +2526,7 @@ if (FOLD_API) {
 }
 
 // Hidden internal tools — no #nav entry, reached by typing the URL.
+if (location.hash === "#palette") buildPaletteView();
 if (location.hash === "#tune") buildTuneView();
 if (location.hash === "#moderate") buildModerateView();
 if (location.hash === "#feedback") buildFeedbackView();

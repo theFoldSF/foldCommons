@@ -65,6 +65,9 @@ const composedZones = (title: string): TextZone[] => [
   { id: "time", label: "Time chip", role: "body", x: 0, y: 0, w: 0, size: 0, align: "start", default: "9pm", colorable: true },
 ];
 
+// Reference dimensions the custom template scales from (the digital flyer).
+const CUSTOM_BASE = { w: 1080, h: 1350 };
+
 export const TEMPLATES: Template[] = [
   {
     id: "flyer-print",
@@ -162,6 +165,63 @@ export const TEMPLATES: Template[] = [
     zones: [],
     wordmark: { x: 500, y: 964, size: 20, align: "middle" },
   },
+  {
+    id: "custom",
+    label: "Custom size",
+    blurb: "Any dimensions — set the width and height yourself.",
+    kind: "poster",
+    // Defaults double as the reference the metrics below are scaled from, so
+    // a custom doc opens identical to the digital flyer until it is resized.
+    w: CUSTOM_BASE.w,
+    h: CUSTOM_BASE.h,
+    register: "paper",
+    allowRegisterSwitch: true,
+    composed: true,
+    comp: { margin: 80, titleSize: 64, detailSize: 32, chipSize: 30, logoH: 42 },
+    zones: composedZones("Aperitivo Night"),
+    wordmark: { x: 540, y: 1280, size: 26, align: "middle" },
+  },
 ];
 
 export const templateById = (id: string) => TEMPLATES.find((t) => t.id === id);
+
+// Limits kept wide but finite: past these the composer's type metrics stop
+// producing anything sensible, and a runaway value would try to rasterize a
+// multi-hundred-megapixel PNG on export.
+export const CUSTOM_MIN = 240;
+export const CUSTOM_MAX = 6000;
+
+export function clampCustomSize(w: number, h: number): { w: number; h: number } {
+  const fix = (n: number, fallback: number) =>
+    Number.isFinite(n) ? Math.round(Math.min(CUSTOM_MAX, Math.max(CUSTOM_MIN, n))) : fallback;
+  return { w: fix(w, CUSTOM_BASE.w), h: fix(h, CUSTOM_BASE.h) };
+}
+
+// A custom-size template: same composed layout, with every type metric and the
+// wordmark scaled off the smaller axis ratio so proportions hold at any aspect
+// rather than the words outgrowing a narrow canvas.
+export function customTemplate(base: Template, w: number, h: number): Template {
+  const size = clampCustomSize(w, h);
+  const k = Math.min(size.w / CUSTOM_BASE.w, size.h / CUSTOM_BASE.h);
+  const c = base.comp!;
+  const wordmarkInset = CUSTOM_BASE.h - base.wordmark.y;
+  return {
+    ...base,
+    w: size.w,
+    h: size.h,
+    comp: {
+      ...c,
+      margin: Math.round(c.margin * k),
+      titleSize: Math.round(c.titleSize * k),
+      detailSize: Math.round(c.detailSize * k),
+      chipSize: Math.round(c.chipSize * k),
+      logoH: Math.round(c.logoH * k),
+    },
+    wordmark: {
+      ...base.wordmark,
+      x: Math.round(size.w / 2),
+      y: Math.round(size.h - wordmarkInset * k),
+      size: Math.round(base.wordmark.size * k),
+    },
+  };
+}

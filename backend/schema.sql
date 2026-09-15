@@ -34,3 +34,16 @@ CREATE TABLE IF NOT EXISTS sig_samples (
 );
 
 CREATE INDEX IF NOT EXISTS sig_samples_created_at ON sig_samples (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS palettes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  maker TEXT,                  -- who tuned it (free text, may be NULL)
+  colors TEXT NOT NULL,        -- JSON text: { <canon color key>: "#rrggbb", ... }
+  -- Returned to the creator once, kept in their browser. Lets an author prune
+  -- their own palette without holding the shared moderation secret.
+  edit_key TEXT NOT NULL,
+  created_at TEXT NOT NULL     -- ISO 8601
+);
+
+CREATE INDEX IF NOT EXISTS palettes_created_at ON palettes (created_at DESC);

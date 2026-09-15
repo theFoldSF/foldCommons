@@ -3,10 +3,30 @@
 // engine params) plus member text — it cannot describe an off-brand artifact,
 // which is what makes shared/remixed docs safe by construction.
 
-import { GROUNDS, REGISTERS, SEASONS, type RegisterKey, LINE_MOTIF } from "./brand/tokens";
+import {
+  GROUNDS,
+  REGISTERS,
+  SEASONS,
+  type RegisterKey,
+  LINE_MOTIF,
+  buildGrounds,
+  buildRegisters,
+  resolveColors,
+  COLOR_KEYS,
+  type ColorMap,
+  type Ground,
+  type Palette,
+} from "./brand/tokens";
 import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById, shuffleParams } from "./engines/index";
 import { FRAMES, PLATE_FRAMES } from "./frames/index";
-import { TEMPLATES, templateById, defaultDateChip, type Template } from "./templates/index";
+import {
+  TEMPLATES,
+  templateById,
+  defaultDateChip,
+  customTemplate,
+  clampCustomSize,
+  type Template,
+} from "./templates/index";
 import { MARKS } from "./marks/index";
 import { PHOTOS } from "./photos/index";
 
@@ -156,13 +176,23 @@ export interface CompState {
   titleFrameSeed: number;
   xf: Partial<Record<XfKey, XfState>>; // per-element free transform
   locks?: Partial<Record<LockKey, boolean>>; // shuffleComp() skips locked slots
-  // Palette lab — temporary escape hatch while the design team dials accent
-  // colors; when set, replaces the active register's accent list wherever
-  // docAccent()/docAccents() resolve one. Not canon; explicitly experimental.
+  // A team-tuned palette (see the #palette tuner). Overrides the canon color
+  // slots, which every ground, register and accent derives from — so this
+  // retints the whole doc, not just its accents. Stored on the doc rather than
+  // held app-side so a gallery entry or share link keeps the colors it was
+  // made in. `id` is the backend row it came from, for the picker's active
+  // state; the colors themselves travel inline so the doc still renders if
+  // that palette is later deleted.
+  palette?: { id?: string; name?: string; colors: Palette };
+  // Legacy accent-only override from the retired palette lab. Read-only now:
+  // no UI writes it, but docs saved before the tuner existed still honor it.
   paletteOverride?: { accents: string[] };
 }
 
 export interface Doc {
+  // Only meaningful for the "custom" template — the member's chosen canvas
+  // dimensions. Absent everywhere else, where the template's own w/h rule.
+  customSize?: { w: number; h: number };
   v: 2;
   template: string;
   register: RegisterKey;
@@ -283,7 +313,10 @@ function avoidScallopOverload(doc: Doc) {
 }
 
 export function docTemplate(doc: Doc): Template {
-  return templateById(doc.template) ?? TEMPLATES[0];
+  const t = templateById(doc.template) ?? TEMPLATES[0];
+  // The custom template's own w/h are only defaults; the doc's size wins.
+  if (t.id === "custom" && doc.customSize) return customTemplate(t, doc.customSize.w, doc.customSize.h);
+  return t;
 }
 
 // Short, collision-safe-enough id for a new text box.
@@ -291,12 +324,23 @@ export function newTextBoxId(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
-// The accent list docAccent() indexes into: a palette-lab override when one
-// is set, otherwise the active register's accents with the ground color
-// excluded so a chip/accent never lands invisibly on top of a matching ground.
+// The canon slots as this doc sees them — tuned palette applied, or canon.
+export function docColors(doc: Doc): ColorMap {
+  return resolveColors(doc.comp.palette?.colors);
+}
+
+// Grounds for this doc. Same nine entries as canon, retinted by its palette.
+export function docGrounds(doc: Doc): Ground[] {
+  return doc.comp.palette?.colors ? buildGrounds(docColors(doc)) : GROUNDS;
+}
+
+// The accent list docAccent() indexes into: the active register's accents with
+// the ground color excluded, so a chip never lands invisibly on a matching
+// ground. A legacy palette-lab override still wins where one survives.
 export function docAccents(doc: Doc): string[] {
   if (doc.comp.paletteOverride?.accents.length) return doc.comp.paletteOverride.accents;
-  return REGISTERS[doc.register].accents.filter((a) => a !== docGround(doc).hex);
+  const registers = doc.comp.palette?.colors ? buildRegisters(docColors(doc)) : REGISTERS;
+  return registers[doc.register].accents.filter((a) => a !== docGround(doc).hex);
 }
 
 // How many accent indexes are actually pickable for this doc (docAccent's own
@@ -331,8 +375,9 @@ function avoidChipFrameClash(doc: Doc) {
   doc.comp.chipAccents = [bump(doc.comp.chipAccents[0]), bump(doc.comp.chipAccents[1])];
 }
 
-export function docGround(doc: Doc) {
-  return GROUNDS[((doc.ground % GROUNDS.length) + GROUNDS.length) % GROUNDS.length];
+export function docGround(doc: Doc): Ground {
+  const grounds = docGrounds(doc);
+  return grounds[((doc.ground % grounds.length) + grounds.length) % grounds.length];
 }
 
 export function docAccent(doc: Doc, idx: number): string {
@@ -496,6 +541,36 @@ export function sanitize(doc: Doc): Doc {
     ? rawAccents.filter((a): a is string => typeof a === "string" && HEX.test(a)).slice(0, 8)
     : [];
   doc.comp.paletteOverride = cleanAccents.length >= 2 ? { accents: cleanAccents } : undefined;
+
+  // custom canvas size: clamped, and dropped entirely off the custom template
+  // so a doc switched back to a fixed template can't keep a stale size.
+  const rawSize = (doc as unknown as { customSize?: { w?: unknown; h?: unknown } }).customSize;
+  if (doc.template === "custom" && rawSize && typeof rawSize === "object") {
+    doc.customSize = clampCustomSize(Number(rawSize.w), Number(rawSize.h));
+  } else {
+    doc.customSize = undefined;
+  }
+
+  // tuned palette: keep only canon slot names carrying a valid #rrggbb.
+  const rawPalette = (doc.comp as unknown as { palette?: { colors?: unknown; id?: unknown; name?: unknown } })
+    .palette;
+  const rawColors = rawPalette?.colors;
+  if (rawColors && typeof rawColors === "object" && !Array.isArray(rawColors)) {
+    const clean: Palette = {};
+    for (const k of COLOR_KEYS) {
+      const v = (rawColors as Record<string, unknown>)[k];
+      if (typeof v === "string" && HEX.test(v)) clean[k] = v;
+    }
+    doc.comp.palette = Object.keys(clean).length
+      ? {
+          colors: clean,
+          id: typeof rawPalette?.id === "string" ? rawPalette.id : undefined,
+          name: typeof rawPalette?.name === "string" ? rawPalette.name.slice(0, 80) : undefined,
+        }
+      : undefined;
+  } else {
+    doc.comp.palette = undefined;
+  }
 
   // pre-prose / pre-text-box docs: fold the old `detail` line into `prose`,
   // then `prose` into the first text box — a v1/v2 share link must still

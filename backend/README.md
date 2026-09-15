@@ -1,7 +1,8 @@
 # fold-commons-backend
 
 Cloudflare Worker that stores the community photo library in R2 and the
-community gallery, feedback inbox, and signature tuning log in D1. R2
+community gallery, feedback inbox, signature tuning log, and team color
+palettes in D1. R2
 objects plus their custom metadata (`name`, `w`, `h`) are the entire photo
 store; everything else is a small D1 table (see `schema.sql`).
 
@@ -150,6 +151,27 @@ local development but should be tightened to the real app origin (e.g.
 - `DELETE /tuning/:id` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
   Prunes one note from the pool. 204 on success, 404 if no row matched.
 
+- `GET /palettes` — **public.** `[{ id, name, maker, colors, created_at },
+  ...]`, newest first, capped at 200. `colors` is a real JSON object keyed by
+  canon slot name. `edit_key` is **never** included here.
+- `POST /palettes` — **public, no auth.** Body `{ name, colors, maker? }`.
+  `colors` maps canon slot names (`cream`, `cream2`, `warmGray`, `coolGray`,
+  `orange`, `pink`, `sky`, `green`, `ink`, `blueprint`) to `#rrggbb`; at
+  least one is required, unknown keys are dropped rather than rejected so a
+  new slot can't 400 an older client. Returns the row **plus a one-time
+  `edit_key`** — the only time it is ever sent.
+- `PUT /palettes/:id` — body `{ name, colors }`. Needs either
+  `?key=<edit_key>` or `Authorization: Bearer <UPLOAD_TOKEN>`.
+- `DELETE /palettes/:id` — same auth as `PUT`. 204, or 404 if no row matched.
+
+Palettes use a different auth shape from everything else here, on purpose.
+Writing one must be open — the whole point is that any teammate can tune a
+palette without holding the moderation secret — but an open `DELETE` would
+let anyone wipe anyone's work. So creating a palette hands back an `edit_key`
+that lives in that browser's `localStorage`: its author can edit and delete
+it, nobody else can, and no shared secret is distributed. The moderation
+token still overrides, for cleanup.
+
 Every `Bearer <UPLOAD_TOKEN>`-gated route above shares one moderator
 workflow: paste the token once into the app's hidden `#moderate` (photo
 review), `#feedback` (bug/feature inbox), or `#tune` ("Everyone's notes"
@@ -163,9 +185,28 @@ accumulate for whoever holds the token.
 ## Local dev
 
 ```sh
-bun run dev   # wrangler dev
+# In backend/ — serves on http://127.0.0.1:8787 against a local D1/R2
+bun run dev -- --local
+
+# Seed the local shadow database (it is keyed by database_id, so it starts
+# empty and needs this again whenever that id changes)
+wrangler d1 execute fold-commons --file=./schema.sql --local
 ```
 
-Requires being logged in via `wrangler login` and having created the R2
-bucket, since `wrangler dev` talks to real Cloudflare resources unless you
-pass `--local`/`--remote` flags of your own choosing.
+Then point the frontend at it — `fold-commons/.env.local`:
+
+```sh
+VITE_FOLD_API=http://127.0.0.1:8787
+```
+
+`.dev.vars` (gitignored, never uploaded) carries the dev-only overrides:
+
+```sh
+UPLOAD_TOKEN = "any-value-you-like"
+ALLOWED_ORIGIN = "*"
+```
+
+That `ALLOWED_ORIGIN` matters. Production pins the allowlist to the real app
+origins, so a vite dev server on `localhost:5173` talking to a *locally run*
+worker would otherwise be refused by CORS. Overriding it in `.dev.vars`
+keeps local dev working without loosening anything that ships.

@@ -9,7 +9,7 @@ import { framePath, ticketPath, scallopChipPath, scallopChipProtrusion, frameAsp
 import { rng, smoothPath } from "./engines/util.js";
 import { markById } from "./marks/index";
 import { photoById, photoRegionLum } from "./photos/index";
-import { ARRANGEMENTS, docAccent, docGround, docSeason, docTemplate, textXfKey, type ChipStyle, type Doc, type TextBoxState, type XfKey, type XfState } from "./state";
+import { ARRANGEMENTS, docAccent, docColors, docGround, docSeason, docTemplate, textXfKey, type ChipStyle, type Doc, type TextBoxState, type XfKey, type XfState } from "./state";
 import type { TextZone } from "./templates/index";
 
 const esc = (s: string) =>
@@ -127,13 +127,14 @@ function chipSvg(
   size: number,
   seed: number,
   style: ChipStyle,
+  pair: InkPair,
   align: "start" | "end" = "end"
 ): { svg: string; w: number } {
   if (!text.trim()) return { svg: "", w: 0 };
   const w = text.length * size * 0.56 + size * 1.7;
   const h = size * 1.75;
   const x = align === "end" ? anchor - w : anchor;
-  const ink = isDark(accent) ? "#FFF9F1" : "#03071B";
+  const ink = isDark(accent) ? pair.light : pair.dark;
   const pathD = style === "scallop" ? scallopChipPath(seed, w, h) : ticketPath(seed, w, h);
   return {
     svg: `<g transform="translate(${x.toFixed(1)} ${(cy - h / 2).toFixed(1)})">
@@ -403,13 +404,13 @@ function chipsRow(
   const chipGap = chipStyle === "scallop" ? size * 0.6 + scallopChipProtrusion(h) * 2 : size * 0.6;
   let svg = "";
   let cursor = anchor;
-  const near = chipSvg(nearText, nearAccent, anchor, cy, size, seedBase, chipStyle, align);
+  const near = chipSvg(nearText, nearAccent, anchor, cy, size, seedBase, chipStyle, inkPair(doc), align);
   if (near.svg) {
     const cx = align === "end" ? anchor - near.w / 2 : anchor + near.w / 2;
     svg += xfWrap(doc, nearKey, cx, cy, near.svg);
     cursor = align === "end" ? anchor - near.w - chipGap : anchor + near.w + chipGap;
   }
-  const far = chipSvg(farText, farAccent, cursor, cy, size, seedBase + 1, chipStyle, align);
+  const far = chipSvg(farText, farAccent, cursor, cy, size, seedBase + 1, chipStyle, inkPair(doc), align);
   let farEdge = near.svg ? cursor : anchor;
   if (far.svg) {
     const cx = align === "end" ? cursor - far.w / 2 : cursor + far.w / 2;
@@ -617,7 +618,18 @@ function xfPtInv(t: XfState | undefined, cx: number, cy: number, x: number, y: n
   };
 }
 
-const C_LIGHT = "#FFF9F1", C_DARK = "#03071B";
+// The light/dark pair every "pick a readable ink for this surface" decision
+// chooses between. Resolved from the doc's palette, not canon, so a tuned
+// palette retints chip text, diagram labels and the split-ink signature too.
+export interface InkPair {
+  light: string;
+  dark: string;
+}
+
+function inkPair(doc: Doc): InkPair {
+  const c = docColors(doc);
+  return { light: c.cream, dark: c.ink };
+}
 
 // Luminance of the full-bleed surfaces under a box: ground, veiled by the
 // background texture when one is set.
@@ -827,8 +839,9 @@ function splitInkSvg(
     if (inside) { inLum += lum; inN++; }
     else { outLum += lum; outN++; }
   }
-  const inkIn = inN ? (inLum / inN < 0.5 ? C_LIGHT : C_DARK) : null;
-  const inkOut = outN ? (outLum / outN < 0.5 ? C_LIGHT : C_DARK) : null;
+  const pair = inkPair(doc);
+  const inkIn = inN ? (inLum / inN < 0.5 ? pair.light : pair.dark) : null;
+  const inkOut = outN ? (outLum / outN < 0.5 ? pair.light : pair.dark) : null;
   if (!w0 || !fp || !inkIn || !inkOut || inkIn === inkOut)
     return xfWrap(doc, key, cx, cy, render(inkIn ?? inkOut ?? docGround(doc).ink));
   const photoT = xfAttr(pt, wcx, wcy);
@@ -1146,14 +1159,14 @@ function scatterCenters(seed: number, W: number, H: number, widths: number[], bo
 // One diagram node in the chosen treatment — the same three the chips use:
 // a ticket-stub chip, a chunky scallop chip, or plain text with a small
 // rounded color pill beneath.
-function nodeSvg(style: "ticket" | "scallop" | "plain", label: string, accent: string, cx: number, cy: number, w: number, h: number, fsize: number, ink: string, seed: number): string {
+function nodeSvg(style: "ticket" | "scallop" | "plain", label: string, accent: string, cx: number, cy: number, w: number, h: number, fsize: number, ink: string, seed: number, pair: InkPair): string {
   if (style === "plain") {
     const pillW = Math.min(w * 0.6, fsize * 3.4), pillH = fsize * 0.26;
     return `<text x="${cx.toFixed(1)}" y="${(cy - h * 0.1).toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="${ink}"
       font-family="${fontFamilyCss("Figtree")}" font-size="${fsize}" font-weight="600">${esc(label)}</text>
       <rect x="${(cx - pillW / 2).toFixed(1)}" y="${(cy + h * 0.24 - pillH / 2).toFixed(1)}" width="${pillW.toFixed(1)}" height="${pillH.toFixed(1)}" rx="${(pillH / 2).toFixed(1)}" fill="${accent}"/>`;
   }
-  const chipInk = isDark(accent) ? "#FFF9F1" : "#03071B";
+  const chipInk = isDark(accent) ? pair.light : pair.dark;
   const pathD = style === "scallop" ? scallopChipPath(seed, w, h) : ticketPath(seed, w, h);
   return `<g transform="translate(${(cx - w / 2).toFixed(1)} ${(cy - h / 2).toFixed(1)})">
     <path d="${pathD}" fill="${accent}"/>
@@ -1236,7 +1249,7 @@ function diagramSvg(doc: Doc, W: number, H: number, ink: string, ground: string)
   d.nodes.forEach((n, i) => {
     const c = centers[i];
     const accent = docAccent(doc, n.accent);
-    out += nodeSvg(d.nodeStyle, n.label, accent, c.x, c.y, c.w, boxH, fsize, ink, i * 131 + 7);
+    out += nodeSvg(d.nodeStyle, n.label, accent, c.x, c.y, c.w, boxH, fsize, ink, i * 131 + 7, inkPair(doc));
   });
   return out;
 }
@@ -1244,6 +1257,7 @@ function diagramSvg(doc: Doc, W: number, H: number, ink: string, ground: string)
 // --- sticker sheet -----------------------------------------------------------
 
 function stickersSvg(doc: Doc, W: number, H: number): string {
+  const stickerPair = inkPair(doc);
   const ids = doc.stickers.ids;
   const cols = ids.length <= 4 ? 2 : 3;
   const rows = Math.ceil(ids.length / cols);
@@ -1264,7 +1278,7 @@ function stickersSvg(doc: Doc, W: number, H: number): string {
     const back = framePath("scallop", i * 271 + 11, bs, bs);
     const pad = cell * 0.19;
     out += `<g transform="translate(${bx.toFixed(1)} ${by.toFixed(1)})">
-      <path d="${back.d}"${back.transform ? ` transform="${back.transform}"` : ""} fill="#FFF9F1" stroke="#03071B" stroke-opacity="0.25" stroke-width="2" stroke-dasharray="7 6"/>
+      <path d="${back.d}"${back.transform ? ` transform="${back.transform}"` : ""} fill="${stickerPair.light}" stroke="${stickerPair.dark}" stroke-opacity="0.25" stroke-width="2" stroke-dasharray="7 6"/>
     </g>
     <svg x="${(ox + col * cell + pad).toFixed(1)}" y="${(oy + row * cell + pad).toFixed(1)}"
       width="${(cell - pad * 2).toFixed(1)}" height="${(cell - pad * 2).toFixed(1)}" viewBox="${m.viewBox}"

@@ -583,3 +583,96 @@ button.mini:hover { border-color: var(--ink); }
 
 .panel-head-row { display: flex; align-items: center; gap: 2px; }
 .panel-head-row .panel-title { flex: 1; min-width: 0; }
+
+/* --- team palettes ---------------------------------------------------------
+   The picker sits under Ground in the left panel; the tuner is the #palette
+   hidden page. Dots stand in for a palette so the list stays scannable. */
+.palette-picker { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.pal-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--cream);
+  border: 1.5px solid var(--rule);
+  color: var(--ink);
+  font-family: "Denim", "Figtree", sans-serif;
+  font-weight: 600;
+  font-size: 12.5px;
+  padding: 6px 9px;
+  border-radius: 2px;
+  cursor: pointer;
+  text-align: left;
+}
+.pal-chip:not(.active):hover { border-color: var(--ink); }
+.pal-chip.active { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+.pal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-dots { display: inline-flex; gap: 2px; flex: none; }
+.pal-dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: block;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+.pal-dots.big i { width: 14px; height: 14px; }
+
+.pal-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.pal-slot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 7px 9px;
+}
+.pal-slot input[type="color"] {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+.pal-slot-meta { flex: 1; min-width: 0; }
+.pal-slot-meta .l { font-size: 12.5px; font-weight: 600; }
+.pal-slot-meta .hx { font-size: 10.5px; opacity: 0.55; }
+.pal-reset { flex: none; }
+
+/* The preview is a real doc render, not a swatch strip — a palette is judged
+   on actual work or not at all. */
+.pal-preview {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+  background: var(--warm-gray, #e8e4e1);
+}
+.pal-preview-inner { width: 100%; max-width: 320px; }
+.pal-preview-inner svg { width: 100%; height: auto; display: block; }
+.pal-status { min-height: 18px; margin-top: 8px; }
+.pal-list { display: flex; flex-direction: column; gap: 8px; }
+.pal-card .pal-dots { flex: none; align-self: center; }
+
+/* Custom canvas size — two number inputs that read as one dimension pair. */
+.size-row { align-items: center; gap: 6px; }
+.size-row input[type="number"] {
+  width: 100%;
+  background: var(--cream);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  font-family: "Fira Code", monospace;
+  font-size: 13px;
+  padding: 8px 9px;
+  border-radius: 2px;
+}
+.size-row input[type="number"]:focus { outline: none; border-color: var(--ink); }
+.size-row .cs-x { flex: none; opacity: 0.5; }

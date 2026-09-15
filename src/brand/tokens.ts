@@ -40,6 +40,36 @@ export const COLOR = {
 export const CANON_COLORS: Swatch[] = Object.values(COLOR);
 
 // ---------------------------------------------------------------------------
+// Palettes — a team-tuned override of the canon slots above. Everything the
+// app colors in resolves from these ten names, so overriding them retints the
+// whole system (grounds, registers, accents, motifs, chips, diagrams) rather
+// than just an accent list. GROUNDS/REGISTERS below are the canon instances of
+// the same builders the resolver uses, so canon and tuned never drift apart.
+// ---------------------------------------------------------------------------
+
+export type ColorKey = keyof typeof COLOR;
+export type Palette = Partial<Record<ColorKey, string>>;
+
+export const COLOR_KEYS = Object.keys(COLOR) as ColorKey[];
+
+export type ColorMap = Record<ColorKey, string>;
+
+export const CANON_COLOR_MAP: ColorMap = Object.fromEntries(
+  COLOR_KEYS.map((k) => [k, COLOR[k].hex])
+) as ColorMap;
+
+// A palette may name any subset of slots; the rest stay canon.
+export function resolveColors(palette?: Palette | null): ColorMap {
+  if (!palette) return CANON_COLOR_MAP;
+  const out = { ...CANON_COLOR_MAP };
+  for (const k of COLOR_KEYS) {
+    const v = palette[k];
+    if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) out[k] = v;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Registers — two grounds the system actually uses: paper (cream, schematic
 // ink drawings, candy accents) and blueprint (deep ink ground, light traces —
 // the oscilloscope / cyanotype mode).
@@ -56,39 +86,30 @@ export interface Register {
   accents: string[];
 }
 
-export const REGISTERS: Record<RegisterKey, Register> = {
+export function buildRegisters(c: ColorMap): Record<RegisterKey, Register> {
+  return {
   paper: {
     key: "paper",
     label: "Paper",
     blurb:
       "Cream ground, near-black ink, candy accents. Schematic drawings on warm paper — most things live here.",
-    ground: COLOR.cream.hex,
-    ink: COLOR.ink.hex,
-    accents: [
-      COLOR.orange.hex,
-      COLOR.pink.hex,
-      COLOR.sky.hex,
-      COLOR.green.hex,
-      COLOR.blueprint.hex,
-      COLOR.coolGray.hex,
-    ],
+    ground: c.cream,
+    ink: c.ink,
+    accents: [c.orange, c.pink, c.sky, c.green, c.blueprint, c.coolGray],
   },
   blueprint: {
     key: "blueprint",
     label: "Blueprint",
     blurb:
       "Deep ink ground, cream traces. The oscilloscope / cyanotype mode — for night flyers and heavier moods.",
-    ground: COLOR.ink.hex,
-    ink: COLOR.cream.hex,
-    accents: [
-      COLOR.pink.hex,
-      COLOR.sky.hex,
-      COLOR.green.hex,
-      COLOR.orange.hex,
-      COLOR.cream2.hex,
-    ],
+    ground: c.ink,
+    ink: c.cream,
+    accents: [c.pink, c.sky, c.green, c.orange, c.cream2],
   },
-};
+  };
+}
+
+export const REGISTERS: Record<RegisterKey, Register> = buildRegisters(CANON_COLOR_MAP);
 
 // ---------------------------------------------------------------------------
 // Grounds — any canon color can carry a whole composition (the exploration
@@ -104,25 +125,31 @@ export interface Ground {
   register: RegisterKey; // accent list source
 }
 
-const g = (key: keyof typeof COLOR, ink: string, register: RegisterKey): Ground => ({
-  key,
-  label: COLOR[key].name,
-  hex: COLOR[key].hex,
-  ink,
-  register,
-});
-
-export const GROUNDS: Ground[] = [
-  g("cream", COLOR.ink.hex, "paper"),
-  g("cream2", COLOR.ink.hex, "paper"),
-  g("warmGray", COLOR.ink.hex, "paper"),
-  g("orange", COLOR.cream.hex, "paper"),
-  g("pink", COLOR.ink.hex, "paper"),
-  g("sky", COLOR.ink.hex, "paper"),
-  g("green", COLOR.ink.hex, "paper"),
-  g("blueprint", COLOR.cream.hex, "blueprint"),
-  g("ink", COLOR.cream.hex, "blueprint"),
+// Which canon slot each ground draws its own fill and its ink from. Keeping
+// this as slot *names* (not hexes) is what lets a palette retint grounds.
+const GROUND_SPECS: { key: ColorKey; ink: ColorKey; register: RegisterKey }[] = [
+  { key: "cream", ink: "ink", register: "paper" },
+  { key: "cream2", ink: "ink", register: "paper" },
+  { key: "warmGray", ink: "ink", register: "paper" },
+  { key: "orange", ink: "cream", register: "paper" },
+  { key: "pink", ink: "ink", register: "paper" },
+  { key: "sky", ink: "ink", register: "paper" },
+  { key: "green", ink: "ink", register: "paper" },
+  { key: "blueprint", ink: "cream", register: "blueprint" },
+  { key: "ink", ink: "cream", register: "blueprint" },
 ];
+
+export function buildGrounds(c: ColorMap): Ground[] {
+  return GROUND_SPECS.map(({ key, ink, register }) => ({
+    key,
+    label: COLOR[key].name,
+    hex: c[key],
+    ink: c[ink],
+    register,
+  }));
+}
+
+export const GROUNDS: Ground[] = buildGrounds(CANON_COLOR_MAP);
 
 // Rough relative luminance — used to pick readable text on accent chips.
 export function isDark(hex: string): boolean {

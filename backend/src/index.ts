@@ -20,6 +20,10 @@
 //   POST   /tuning             -> log a signature tuning sample (public, no auth)
 //   GET    /tuning             -> list pooled tuning samples (bearer-token guarded)
 //   DELETE /tuning/:id         -> remove a tuning sample (bearer-token guarded)
+//   GET    /palettes           -> list team palettes (public)
+//   POST   /palettes           -> save one (public); returns a one-time edit_key
+//   PUT    /palettes/:id       -> update one (edit_key or bearer token)
+//   DELETE /palettes/:id       -> remove one (edit_key or bearer token)
 //   OPTIONS *                   -> CORS preflight
 //
 // See ../README.md for deploy steps.
@@ -54,6 +58,14 @@ interface FeedbackRow {
   name: string | null;
   context: string | null;
   status: string;
+  created_at: string;
+}
+
+interface PaletteRow {
+  id: string;
+  name: string;
+  maker: string | null;
+  colors: string;
   created_at: string;
 }
 
@@ -105,7 +117,7 @@ function resolveAllowedOrigin(request: Request, env: Env): string {
 function corsHeaders(env: Env, request: Request): HeadersInit {
   return {
     "Access-Control-Allow-Origin": resolveAllowedOrigin(request, env),
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
     // The response varies per caller now, so caches must key on Origin.
     Vary: "Origin",
@@ -627,11 +639,144 @@ async function route(request: Request, env: Env): Promise<Response> {
         if (!isAuthorized(request, env)) return json({ error: "Unauthorized" }, env, { status: 401 });
         return await deleteSigSample(decodeURIComponent(tuningMatch[1]), env);
       }
+      if (url.pathname === "/palettes" && request.method === "GET") {
+        return await listPalettes(env);
+      }
+      if (url.pathname === "/palettes" && request.method === "POST") {
+        return await createPalette(request, env);
+      }
+      const paletteMatch = url.pathname.match(/^\/palettes\/([^/]+)$/);
+      if (paletteMatch && request.method === "PUT") {
+        return await updatePalette(decodeURIComponent(paletteMatch[1]), request, env);
+      }
+      if (paletteMatch && request.method === "DELETE") {
+        return await deletePalette(decodeURIComponent(paletteMatch[1]), request, env);
+      }
       return json({ error: "Not found" }, env, { status: 404 });
     } catch (err) {
       return json({ error: "Internal error", detail: String(err) }, env, { status: 500 });
     }
   }
+}
+
+const MAX_PALETTE_NAME_LEN = 80;
+const MAX_PALETTE_MAKER_LEN = 120;
+// The canon slots a palette may override. Anything else in the body is
+// dropped rather than rejected, so a future slot can't 400 an older client.
+const PALETTE_SLOTS = [
+  "cream",
+  "cream2",
+  "warmGray",
+  "coolGray",
+  "orange",
+  "pink",
+  "sky",
+  "green",
+  "ink",
+  "blueprint",
+];
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+// Palettes are shared: everyone reads the whole list. Writes are open too, but
+// editing or deleting one needs either its edit_key (handed to the author on
+// create, kept in their browser) or the moderation token — so an author can
+// prune their own without the shared secret, and nobody else can touch it.
+function parsePaletteBody(body: Record<string, unknown>): { colors: Record<string, string> } | string {
+  const raw = body.colors;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return "'colors' must be an object";
+  const colors: Record<string, string> = {};
+  for (const slot of PALETTE_SLOTS) {
+    const v = (raw as Record<string, unknown>)[slot];
+    if (v === undefined) continue;
+    if (typeof v !== "string" || !HEX_RE.test(v)) return `'colors.${slot}' must be a #rrggbb string`;
+    colors[slot] = v.toLowerCase();
+  }
+  if (!Object.keys(colors).length) return "'colors' must name at least one canon slot";
+  return { colors };
+}
+
+function toPaletteItem(row: PaletteRow) {
+  let colors: unknown = {};
+  try {
+    colors = JSON.parse(row.colors);
+  } catch {
+    colors = {};
+  }
+  return { id: row.id, name: row.name, maker: row.maker, colors, created_at: row.created_at };
+}
+
+async function listPalettes(env: Env): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT id, name, maker, colors, created_at FROM palettes ORDER BY created_at DESC LIMIT 200"
+  ).all<PaletteRow>();
+  return json((results ?? []).map(toPaletteItem), env);
+}
+
+async function createPalette(request: Request, env: Env): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, env, { status: 400 });
+  }
+  const name = typeof body.name === "string" ? body.name.trim().slice(0, MAX_PALETTE_NAME_LEN) : "";
+  if (!name) return json({ error: "'name' must be a non-empty string" }, env, { status: 400 });
+  const parsed = parsePaletteBody(body);
+  if (typeof parsed === "string") return json({ error: parsed }, env, { status: 400 });
+  const maker =
+    typeof body.maker === "string" && body.maker.trim() ? body.maker.trim().slice(0, MAX_PALETTE_MAKER_LEN) : null;
+
+  const id = crypto.randomUUID();
+  const edit_key = crypto.randomUUID();
+  const created_at = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO palettes (id, name, maker, colors, edit_key, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  )
+    .bind(id, name, maker, JSON.stringify(parsed.colors), edit_key, created_at)
+    .run();
+  // edit_key is returned here and never again — the author's browser keeps it.
+  return json({ id, name, maker, colors: parsed.colors, created_at, edit_key }, env, { status: 201 });
+}
+
+// True when the caller may modify this palette: moderation token, or the
+// edit_key handed out when it was created.
+async function mayEditPalette(id: string, request: Request, env: Env): Promise<boolean> {
+  if (isAuthorized(request, env)) return true;
+  const key = new URL(request.url).searchParams.get("key");
+  if (!key) return false;
+  const row = await env.DB.prepare("SELECT edit_key FROM palettes WHERE id = ?").bind(id).first<{ edit_key: string }>();
+  return !!row && row.edit_key === key;
+}
+
+async function updatePalette(id: string, request: Request, env: Env): Promise<Response> {
+  if (!(await mayEditPalette(id, request, env))) {
+    return json({ error: "Unauthorized" }, env, { status: 401 });
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, env, { status: 400 });
+  }
+  const name = typeof body.name === "string" ? body.name.trim().slice(0, MAX_PALETTE_NAME_LEN) : "";
+  if (!name) return json({ error: "'name' must be a non-empty string" }, env, { status: 400 });
+  const parsed = parsePaletteBody(body);
+  if (typeof parsed === "string") return json({ error: parsed }, env, { status: 400 });
+
+  const { meta } = await env.DB.prepare("UPDATE palettes SET name = ?, colors = ? WHERE id = ?")
+    .bind(name, JSON.stringify(parsed.colors), id)
+    .run();
+  if (!meta.changes) return json({ error: "Not found" }, env, { status: 404 });
+  return json({ id, name, colors: parsed.colors }, env);
+}
+
+async function deletePalette(id: string, request: Request, env: Env): Promise<Response> {
+  if (!(await mayEditPalette(id, request, env))) {
+    return json({ error: "Unauthorized" }, env, { status: 401 });
+  }
+  const { meta } = await env.DB.prepare("DELETE FROM palettes WHERE id = ?").bind(id).run();
+  if (!meta.changes) return json({ error: "Not found" }, env, { status: 404 });
+  return new Response(null, { status: 204 });
 }
 
 export default {
