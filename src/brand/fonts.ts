@@ -10,7 +10,6 @@ import { FACES } from "./tokens";
 const LOCAL_FONT_FILES: { family: string; weight: number; url: string }[] = [
   { family: "Denim", weight: 400, url: "/fonts/denim-trial/Denim-TRIAL-Regular.woff2" },
   { family: "Denim", weight: 600, url: "/fonts/denim-trial/Denim-TRIAL-SemiBold.woff2" },
-  { family: "Denim", weight: 800, url: "/fonts/denim-trial/Denim-TRIAL-Heavy.woff2" },
 ];
 
 // Group faces by family so multi-weight families make one valid css2 query.

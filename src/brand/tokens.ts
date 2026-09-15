@@ -182,9 +182,10 @@ export const SEASONS: Season[] = [
 // biggest headings. Fira Code is OFL and used verbatim.
 //
 // The display face is still undecided (see OPEN_QUESTIONS), so rather than
-// stand in for it with an unrelated serif, the display role is simply the
-// heaviest weight of the text face. One less face to load, and it stops the
-// tool implying a display face has been chosen when it hasn't.
+// stand in for it with an unrelated serif, the display role just uses the text
+// face. 600 is the ceiling everywhere — Denim carries noticeably more weight
+// than the Figtree it replaced, so the heavier grades that read as emphasis in
+// Figtree read as clunky here. Size and color carry hierarchy instead.
 // ---------------------------------------------------------------------------
 
 export type TypeRole = "display" | "heading" | "body" | "mono";
@@ -203,8 +204,6 @@ export interface Face {
 }
 
 export const FACES: Face[] = [
-  { name: "Denim", weight: 800, role: "display", local: true, trial: true },
-  { name: "Figtree", weight: 800, role: "display", standInFor: "Denim heavy" },
   // Denim is the chosen text face and is being evaluated from its trial files
   // while licensing is finalized. Figtree stays listed directly behind it:
   // it is what actually renders anywhere the trial files are absent.
@@ -218,7 +217,14 @@ export const FACES: Face[] = [
 export const TYPE_RULES = {
   // Lockups set the wordmark in sentence case — "the Fold" — semi-bold sans.
   wordmark: { text: "the Fold", face: "Figtree", weight: 600, tracking: 0 },
-  byRole: (role: TypeRole) => FACES.filter((f) => f.role === role),
+  // Nothing claims the display role: with 600 as the ceiling a display face
+  // would be identical to a heading, so listing one would just duplicate a row
+  // on the Canon page. Fall back rather than return nothing, since TypeRole
+  // still allows "display" and callers index [0] straight off this.
+  byRole: (role: TypeRole) => {
+    const hit = FACES.filter((f) => f.role === role);
+    return hit.length ? hit : FACES.filter((f) => f.role === "heading");
+  },
 };
 
 // ---------------------------------------------------------------------------
