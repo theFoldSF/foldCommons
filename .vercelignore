@@ -1,11 +1,13 @@
 # Vercel uses this instead of .gitignore when present, so it must cover
-# everything .gitignore does, plus the trial fonts.
+# everything .gitignore does.
+#
+# Note what is deliberately NOT here: public/fonts/denim-trial/. Those files
+# are gitignored but do ship, because deploys run from the one machine holding
+# the Displaay trial. That keeps them out of the repo and out of teammates'
+# checkouts while still letting the deployed site render Denim.
 node_modules/
 dist/
 .env
 .env*
 .vercel/
 .vercel
-
-# Trial-licensed Denim — evaluation only, must never reach a public URL.
-public/fonts/denim-trial/

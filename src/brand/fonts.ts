@@ -5,11 +5,12 @@
 import { FACES } from "./tokens";
 
 // Self-hosted faces, inlined into exports alongside the Google ones. Absent in
-// any build without the trial files, where fetch() 404s and the entry is
-// dropped — exports then carry Figtree, exactly as the screen does.
+// any build without these files, where fetch() 404s and the entry is dropped —
+// exports then carry Figtree, exactly as the screen does.
 const LOCAL_FONT_FILES: { family: string; weight: number; url: string }[] = [
   { family: "Denim", weight: 400, url: "/fonts/denim-trial/Denim-TRIAL-Regular.woff2" },
   { family: "Denim", weight: 600, url: "/fonts/denim-trial/Denim-TRIAL-SemiBold.woff2" },
+  { family: "Denim", weight: 800, url: "/fonts/denim-trial/Denim-TRIAL-Heavy.woff2" },
 ];
 
 // Group faces by family so multi-weight families make one valid css2 query.
@@ -34,13 +35,16 @@ export function loadFonts() {
   loadTrialFaces();
 }
 
-// Trial faces are injected at runtime under `import.meta.env.DEV` rather than
-// written into styles.css, so a production bundle carries no reference to them
-// at all — no stray 404 for a file that is deliberately never deployed. The
-// CSS stacks still name 'Denim' first; an undefined family is simply skipped,
-// so production resolves straight to Figtree.
+// Denim is self-hosted from public/fonts/denim-trial/ rather than fetched from
+// Google, so it needs its own @font-face rules. They are injected here instead
+// of living in styles.css so the file list stays in one place next to the
+// export-embedding path that reads the same array.
+//
+// The files are gitignored on purpose: they are trial-licensed and deploys run
+// from the one machine that holds them, so they never enter the repo or a
+// teammate's checkout. A build without them still works — the CSS stacks name
+// Figtree directly behind Denim.
 function loadTrialFaces() {
-  if (!import.meta.env.DEV) return;
   const css = LOCAL_FONT_FILES.map(
     (f) =>
       `@font-face{font-family:'${f.family}';font-style:normal;font-weight:${f.weight};font-display:swap;src:url('${f.url}') format('woff2');}`
@@ -83,14 +87,11 @@ const TEXT_STACK = `'Denim', 'Figtree', sans-serif`;
 export const fontFamilyCss = (name: string) =>
   name === "Fira Code"
     ? `'Fira Code', monospace`
-    : name === "Fraunces"
-      ? `'Fraunces', serif`
-      : name === "Denim" || name === "Figtree"
-        ? TEXT_STACK
-        : `'${name}', sans-serif`;
+    : name === "Denim" || name === "Figtree"
+      ? TEXT_STACK
+      : `'${name}', sans-serif`;
 
 async function localFontCss(): Promise<string> {
-  if (!import.meta.env.DEV) return "";
   const rules = await Promise.all(
     LOCAL_FONT_FILES.map(async (f) => {
       try {

@@ -52,7 +52,8 @@ Static output, deployed on Vercel (`vercel.json` is set up; `vercel --prod`).
 Draft deliverable. Open brand decisions (type licensing, wordmark casing,
 seasonal governance) are tracked on the in-app **Canon** page. The deck's type
 system is Denim + Fira Code + a chunky display face; Fira Code (OFL) is used
-verbatim, the others ship as OFL stand-ins (Figtree, Fraunces) until licensing
-is decided. The mark library holds the six wireframe fold meshes extracted
+verbatim. Denim is chosen and under trial evaluation locally — Figtree (OFL)
+is the stand-in that actually ships until a license is purchased. The display
+face is still unpicked, so that role just uses the heaviest text weight. The mark library holds the six wireframe fold meshes extracted
 from the lockups; hand-souled redraws of the Brand Jam sketches (cudi catcher,
 fortune teller, …) join them after the FigJam pull.

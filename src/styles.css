@@ -339,8 +339,8 @@ button.mini:hover { border-color: var(--ink); }
 #canonView.active { display: block; }
 .canon-inner { max-width: 900px; margin: 0 auto; }
 .canon-inner h1 {
-  font-family: "Fraunces", serif;
-  font-weight: 900;
+  font-family: "Denim", "Figtree", sans-serif;
+  font-weight: 800;
   font-size: 46px;
   color: var(--ink);
   margin-bottom: 8px;
@@ -501,8 +501,8 @@ button.mini:hover { border-color: var(--ink); }
   right: 0;
 }
 .hidden-page h1 {
-  font-family: "Fraunces", serif;
-  font-weight: 900;
+  font-family: "Denim", "Figtree", sans-serif;
+  font-weight: 800;
   font-size: 30px;
   margin: 0 0 6px;
   padding-right: 90px;

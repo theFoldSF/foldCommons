@@ -178,10 +178,13 @@ export const SEASONS: Season[] = [
 
 // ---------------------------------------------------------------------------
 // Typography — the deck's system is Denim (semi-bold / regular) with Fira Code
-// for numerals, urls, dates, times, and a soft chunky display face for the
-// biggest headings. Fira Code is OFL and used verbatim. Denim and the display
-// face are commercial: the tool ships the closest OFL stand-ins (Figtree;
-// Fraunces black+soft for display) until licensing is decided.
+// for numerals, urls, dates, times, and a separate chunky display face for the
+// biggest headings. Fira Code is OFL and used verbatim.
+//
+// The display face is still undecided (see OPEN_QUESTIONS), so rather than
+// stand in for it with an unrelated serif, the display role is simply the
+// heaviest weight of the text face. One less face to load, and it stops the
+// tool implying a display face has been chosen when it hasn't.
 // ---------------------------------------------------------------------------
 
 export type TypeRole = "display" | "heading" | "body" | "mono";
@@ -200,7 +203,8 @@ export interface Face {
 }
 
 export const FACES: Face[] = [
-  { name: "Fraunces", weight: 900, role: "display", standInFor: "deck display (chunky soft slab)" },
+  { name: "Denim", weight: 800, role: "display", local: true, trial: true },
+  { name: "Figtree", weight: 800, role: "display", standInFor: "Denim heavy" },
   // Denim is the chosen text face and is being evaluated from its trial files
   // while licensing is finalized. Figtree stays listed directly behind it:
   // it is what actually renders anywhere the trial files are absent.
@@ -216,9 +220,6 @@ export const TYPE_RULES = {
   wordmark: { text: "the Fold", face: "Figtree", weight: 600, tracking: 0 },
   byRole: (role: TypeRole) => FACES.filter((f) => f.role === role),
 };
-
-// Fraunces variable axes for the display stand-in (goopy at black weights).
-export const DISPLAY_FONT_CSS = `'Fraunces', serif`;
 
 // ---------------------------------------------------------------------------
 // The Line — sine wave motif: time, fabric, harmonic series, oscilloscope
@@ -251,7 +252,7 @@ export const AVOID = [
 // ---------------------------------------------------------------------------
 
 export const OPEN_QUESTIONS = [
-  "Type licensing: the deck specifies Denim (Displaay) and a commercial display face; lockups use Focal. The tool ships OFL stand-ins (Figtree, Fraunces) — buying licenses would let it use the real faces.",
+  "Type licensing: the deck specifies Denim (Displaay); lockups use Focal. Denim is chosen and in trial evaluation — a purchased license would let the tool self-host it. Figtree (OFL) is what renders until then. The deck's separate chunky display face is still unpicked; the display role currently just uses the heaviest text weight.",
   "Wordmark casing varies across lockups ('the Fold' / 'The Fold') — pick one.",
   "Ink #03071B (deck) vs blueprint blue #171D60 (lockup meshes) — the tool treats ink as text and blueprint as the mesh color; confirm.",
   "Seasonal color rotation: governance still undecided (who chooses, on what cycle).",
