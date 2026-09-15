@@ -67,14 +67,29 @@ local development but should be tightened to the real app origin (e.g.
 
 ## API
 
-- `GET /photos` — `[{ id, name, url, w, h }, ...]`. `url` is an absolute URL
-  back to this same worker's `GET /photos/:id` route.
+- `GET /photos` — `[{ id, name, url, w, h }, ...]`, **approved only**. `url`
+  is an absolute URL back to this same worker's `GET /photos/:id` route.
 - `POST /photos` — requires `Authorization: Bearer <UPLOAD_TOKEN>`. Accepts
   either `multipart/form-data` (`file` field, optional `name`/`w`/`h`
-  fields) or a raw body with `?name=&w=&h=` query params. Returns the
-  created `{ id, name, url, w, h }` with status 201.
+  fields) or a raw body with `?name=&w=&h=` query params. Lands as
+  pre-approved (a direct design-team add). Returns the created
+  `{ id, name, url, w, h }` with status 201.
+- `POST /photos/submit` — **public, no auth.** Same body shape as
+  `POST /photos` plus an optional `submitter` field (form field or query
+  param). Lands with `status: "pending"` — invisible to `GET /photos`
+  until a moderator approves it. Capped at 8MB. Returns `{ id, status }`
+  with status 201.
+- `GET /photos/pending` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
+  `[{ id, name, url, w, h, submitter }, ...]` for everything awaiting
+  review.
+- `POST /photos/:id/approve` — requires `Authorization: Bearer
+  <UPLOAD_TOKEN>`. Flips a pending submission to approved; it then starts
+  appearing in `GET /photos`. Returns the approved `{ id, name, url, w, h }`.
 - `GET /photos/:id` — streams the image bytes with a long-lived
   `Cache-Control` header, or 404 if the id doesn't exist.
+- `DELETE /photos/:id` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
+  Removes a photo outright — the "deny" side of moderation, or general
+  cleanup. 204 on success, 404 if no object matched.
 - `GET /gallery` — `[{ id, name, maker, doc, created_at }, ...]`, newest
   first, capped at 200 rows. `doc` is a real JSON object (already parsed
   server-side), not a doubly-encoded string.
@@ -86,6 +101,23 @@ local development but should be tightened to the real app origin (e.g.
   manually (e.g. via curl) — deliberately not wired into the frontend,
   since a bearer secret can never live in shipped frontend JS. 204 on
   success, 404 if no row matched.
+- `POST /feedback` — **public, no auth.** Body `{ kind, text, name?,
+  context? }`. `kind` is `"bug" | "feature" | "other"` (defaults to
+  `"other"` if omitted/unrecognized); `text` is required, trimmed, capped
+  at 4000 characters. Returns the created row (201) with `status: "new"`.
+- `GET /feedback` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
+  `[{ id, kind, text, name, context, status, created_at }, ...]`, newest
+  first, capped at 200 rows.
+- `PATCH /feedback/:id` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
+  Body `{ status }` where `status` is `"new" | "done"`. Returns
+  `{ id, status }`, 404 if no row matched.
+- `DELETE /feedback/:id` — requires `Authorization: Bearer <UPLOAD_TOKEN>`.
+  204 on success, 404 if no row matched.
+
+Every `Bearer <UPLOAD_TOKEN>`-gated route above shares one moderator
+workflow: paste the token once into the app's hidden `#moderate` (photo
+review) or `#feedback` (bug/feature inbox) pages — it's kept in that
+browser's `localStorage`, never in shipped frontend JS.
 
 ## Local dev
 

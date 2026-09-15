@@ -159,6 +159,30 @@ export async function loadPhotos(onLoaded?: () => void) {
 
 export const photoById = (id: string) => PHOTOS.find((p) => p.id === id);
 
+// Submit a photo into the shared house library, pending design-team
+// approval — separate from a member's own doc-only upload (comp.upload).
+// No-ops when there's no backend configured (VITE_FOLD_API unset), same
+// guard loadRemotePhotos() uses; the caller is expected to hide the entry
+// point entirely in that case.
+export async function submitPhoto(file: File, submitterName?: string): Promise<{ ok: boolean }> {
+  const base = import.meta.env.VITE_FOLD_API;
+  if (!base) return { ok: false };
+  try {
+    const downscaled = await readUpload(file);
+    const blob = await (await fetch(downscaled.src)).blob();
+    const form = new FormData();
+    form.append("file", blob, file.name);
+    form.append("name", file.name);
+    form.append("w", String(downscaled.w));
+    form.append("h", String(downscaled.h));
+    if (submitterName?.trim()) form.append("submitter", submitterName.trim());
+    const res = await fetch(`${base}/photos/submit`, { method: "POST", body: form });
+    return { ok: res.ok };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // Member upload: downscale to a sane size and re-encode as JPEG so docs and
 // localStorage stay manageable.
 export function readUpload(file: File): Promise<Photo> {

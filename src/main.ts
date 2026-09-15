@@ -19,17 +19,32 @@ import { ENGINES, SIGNATURE_ENGINE, defaultParams, engineById } from "./engines/
 import { loadCutouts } from "./cutouts/index";
 import { FRAMES, PLATE_FRAMES } from "./frames/index";
 import { MARKS, loadMarks } from "./marks/index";
-import { PHOTOS, loadPhotos, readUpload } from "./photos/index";
+import { PHOTOS, loadPhotos, readUpload, submitPhoto } from "./photos/index";
 import { TEMPLATES } from "./templates/index";
-import { ensureArtLum, renderDoc } from "./render";
+import { ensureArtLum, renderDoc, sigEngineParams } from "./render";
 import { fetchGalleryMerged, saveGalleryItem, removeLocalGalleryItem, type MergedGalleryItem } from "./gallery/index";
+import { loadSamples, addSample, removeSample, exportSamplesJson } from "./tuning/index";
+import {
+  fetchPendingPhotos,
+  approvePhoto,
+  denyPhoto,
+  fetchFeedback,
+  setFeedbackStatus,
+  deleteFeedback,
+  loadModToken,
+  saveModToken,
+} from "./moderation/index";
+import { submitFeedback, type FeedbackKind } from "./feedback/index";
 import {
   ARRANGEMENTS,
   BG_FADE,
   LAYOUTS,
+  LOCK_KEYS,
   SIG_PARAMS,
   XF_KEYS,
   decodeDoc,
+  defaultSigParams,
+  docAccents,
   docGround,
   docTemplate,
   encodeDoc,
@@ -40,6 +55,7 @@ import {
   textXfKey,
   type ChipStyle,
   type Doc,
+  type LockKey,
   type TextBoxState,
   type WordsLayout,
   type XfKey,
@@ -49,9 +65,29 @@ import {
 // Friendly labels for ARRANGEMENTS, same order/length as state.ts's list.
 const ARRANGE_LABELS = ["Centered", "↖ / ↘", "↗ / ↙", "↙ / ↗", "↘ / ↖", "Overlap ↖", "Overlap ↘", "Off-center"];
 if (ARRANGE_LABELS.length !== ARRANGEMENTS.length) throw new Error("ARRANGE_LABELS out of sync with ARRANGEMENTS");
+// Friendly labels for LOCK_KEYS, same order/length as state.ts's list.
+const LOCK_LABELS: Record<LockKey, string> = {
+  layout: "Layout",
+  frame: "Frame",
+  photo: "Photo",
+  bg: "Background",
+  panelAccent: "Panel color",
+  chips: "Chips",
+  titlePlate: "Title plate",
+  words: "Words",
+  arrange: "Arrange",
+  groundRegister: "Ground",
+  motif: "Motif",
+  signature: "Signature",
+};
 import { exportPng, exportSvg } from "./export";
 
 loadFonts();
+
+// The optional shared backend (Cloudflare Worker) — unset means fully
+// local: photo submission, feedback, and the moderation pages have nothing
+// to talk to, so their entry points stay hidden/inert.
+const FOLD_API: string | undefined = import.meta.env.VITE_FOLD_API;
 
 // --- state -------------------------------------------------------------------
 
@@ -80,13 +116,16 @@ function h(html: string): HTMLElement {
   return t.content.firstElementChild as HTMLElement;
 }
 
-// Color chips constrained to the active register's accents (+ ink option).
+// Color chips constrained to the active register's accents (+ ink option) —
+// or a palette-lab override when one is set, so a chip's on-screen color
+// always matches what docAccent(doc, i) actually renders at that index.
 function accentChips(
   current: number | undefined,
   opts: { allowInk?: boolean },
   onPick: (idx: number) => void
 ): HTMLElement {
   const reg = REGISTERS[doc.register];
+  const accents = docAccents(doc);
   const wrap = h(`<div class="chips"></div>`);
   if (opts.allowInk) {
     const c = h(
@@ -96,7 +135,7 @@ function accentChips(
     c.onclick = () => onPick(-1);
     wrap.appendChild(c);
   }
-  reg.accents.forEach((hex, i) => {
+  accents.forEach((hex, i) => {
     const c = h(
       `<button class="chip ${current === i ? "active" : ""}" style="background:${hex}" title="${hex}"></button>`
     );
@@ -189,6 +228,20 @@ function compControls(into: HTMLElement) {
     buildAll();
   };
   into.appendChild(shuffle);
+
+  const lockRow = h(`<div class="field"><label>🔒 Lock from shuffle</label></div>`);
+  const lockSeg = h(`<div class="seg wrap"></div>`);
+  for (const key of LOCK_KEYS) {
+    const on = !!doc.comp.locks?.[key];
+    const b = h(`<button class="${on ? "active" : ""}">${on ? "🔒" : "🔓"} ${LOCK_LABELS[key]}</button>`);
+    b.onclick = () => {
+      doc.comp.locks = { ...(doc.comp.locks ?? {}), [key]: !on };
+      buildRight();
+    };
+    lockSeg.appendChild(b);
+  }
+  lockRow.appendChild(lockSeg);
+  into.appendChild(lockRow);
 
   const cards = h(`<div class="layout-grid"></div>`);
   for (const l of LAYOUTS) {
@@ -299,12 +352,75 @@ function photoLibraryControls(into: HTMLElement) {
     renderCanvas();
   };
   row.append(up, file, none);
+  if (FOLD_API) {
+    const submit = h(`<button class="mini">📤 Submit to library</button>`);
+    submit.onclick = () => openSubmitPhotoModal();
+    row.appendChild(submit);
+  }
   into.appendChild(row);
   into.appendChild(
     h(`<div class="note">House photos are shot inside the Fold itself — its windows,
       brick, and concrete. Uploads stay in this doc. Either way the frame and
-      palette keep it ours.</div>`)
+      palette keep it ours.${
+        FOLD_API ? " Got a photo that belongs in the house library? Submit it — the design team reviews before it joins the rest." : ""
+      }</div>`)
   );
+}
+
+// Palette lab — a temporary, explicitly non-canon tool for dialing accent
+// colors while the design team settles on them. Overrides the active
+// register's accent list on this doc only; "Reset to canon" removes it.
+function paletteLabControls(into: HTMLElement) {
+  if (!docTemplate(doc).composed) return;
+  into.appendChild(
+    h(`<div class="note">Temporary — for dialing in the palette while the team decides.
+      Not canon. Colors picked here save with this doc (gallery, share links)
+      but don't change the brand.</div>`)
+  );
+  const swatches = h(`<div class="palette-swatches"></div>`);
+  const accents = docAccents(doc);
+  accents.forEach((hex, i) => {
+    const cell = h(`<div class="palette-swatch">
+      <input type="color" value="${hex}">
+      <button class="mini rm" title="Remove">✕</button>
+    </div>`);
+    const input = cell.querySelector("input") as HTMLInputElement;
+    input.oninput = () => {
+      const next = [...accents];
+      next[i] = input.value;
+      doc.comp.paletteOverride = { accents: next };
+      renderCanvas();
+    };
+    // Other panels (date/time chip pickers, diagram node tints) render their
+    // own swatches from this same list — refresh them once the color is
+    // settled, rather than on every drag tick of the native color picker.
+    input.onchange = () => buildRight();
+    (cell.querySelector(".rm") as HTMLButtonElement).onclick = () => {
+      if (accents.length <= 2) return;
+      doc.comp.paletteOverride = { accents: accents.filter((_, j) => j !== i) };
+      buildRight();
+      renderCanvas();
+    };
+    swatches.appendChild(cell);
+  });
+  into.appendChild(swatches);
+
+  const row = h(`<div class="row" style="margin-top:10px"></div>`);
+  const add = h(`<button class="mini">+ Add color</button>`);
+  add.onclick = () => {
+    if (accents.length >= 8) return;
+    doc.comp.paletteOverride = { accents: [...accents, "#888888"] };
+    buildRight();
+    renderCanvas();
+  };
+  const reset = h(`<button class="mini">Reset to canon</button>`);
+  reset.onclick = () => {
+    delete doc.comp.paletteOverride;
+    buildRight();
+    renderCanvas();
+  };
+  row.append(add, reset);
+  into.appendChild(row);
 }
 
 function bgTextureControls(into: HTMLElement) {
@@ -684,8 +800,9 @@ function diagramControls(into: HTMLElement) {
     input.style.cssText =
       "flex:1;background:var(--cream);border:1px solid var(--rule);color:var(--ink);padding:7px;border-radius:2px;font-family:Figtree,sans-serif;font-size:13.5px";
     input.oninput = () => { n.label = input.value; renderCanvas(); };
-    const tint = h(`<button class="chip" style="background:${REGISTERS[doc.register].accents[n.accent % REGISTERS[doc.register].accents.length]};flex:0 0 auto"></button>`);
-    tint.onclick = () => { n.accent = (n.accent + 1) % REGISTERS[doc.register].accents.length; buildRight(); renderCanvas(); };
+    const nodeAccents = docAccents(doc);
+    const tint = h(`<button class="chip" style="background:${nodeAccents[n.accent % nodeAccents.length]};flex:0 0 auto"></button>`);
+    tint.onclick = () => { n.accent = (n.accent + 1) % nodeAccents.length; buildRight(); renderCanvas(); };
     const del = h(`<button class="mini">✕</button>`);
     del.onclick = () => {
       d.nodes.splice(i, 1);
@@ -870,6 +987,117 @@ function openSaveModal(saveB: HTMLElement) {
   });
   (overlay.querySelector(".modal-cancel") as HTMLButtonElement).onclick = close;
   (overlay.querySelector(".modal-save") as HTMLButtonElement).onclick = save;
+}
+
+// --- submit-a-photo modal -----------------------------------------------------
+// Public path into the shared house library — separate from a member's own
+// doc-only upload. Lands pending design-team review (see #moderate below).
+
+function openSubmitPhotoModal() {
+  const overlay = h(`<div class="modal-overlay">
+    <div class="modal-card">
+      <h3 class="modal-title">Submit a photo</h3>
+      <div class="note">Goes to the design team for review before it joins the house library.</div>
+      <div class="field"><label>Photo</label>
+        <input type="file" accept="image/*" class="submit-file"></div>
+      <div class="field"><label>Your name (optional)</label>
+        <input type="text" class="submit-name" placeholder="Anonymous"></div>
+      <div class="modal-actions">
+        <button class="act ghost modal-cancel">Cancel</button>
+        <button class="act modal-submit">Submit</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  const fileInput = overlay.querySelector(".submit-file") as HTMLInputElement;
+  const nameInput = overlay.querySelector(".submit-name") as HTMLInputElement;
+  const submitBtn = overlay.querySelector(".modal-submit") as HTMLButtonElement;
+  function close() {
+    overlay.remove();
+  }
+  overlay.addEventListener("pointerdown", (e) => {
+    if (e.target === overlay) close();
+  });
+  (overlay.querySelector(".modal-cancel") as HTMLButtonElement).onclick = close;
+  submitBtn.onclick = async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    submitBtn.textContent = "Submitting…";
+    submitBtn.disabled = true;
+    const res = await submitPhoto(file, nameInput.value.trim());
+    if (res.ok) {
+      (overlay.querySelector(".modal-card") as HTMLElement).innerHTML = `
+        <h3 class="modal-title">Thanks!</h3>
+        <p class="note">The design team will review it before it joins the library.</p>
+        <div class="modal-actions"><button class="act modal-close">Close</button></div>`;
+      (overlay.querySelector(".modal-close") as HTMLButtonElement).onclick = close;
+    } else {
+      submitBtn.textContent = "Failed — try again";
+      submitBtn.disabled = false;
+    }
+  };
+}
+
+// --- feedback modal ------------------------------------------------------------
+// Visible to everyone (topbar button) — a bug report or feature request,
+// sent straight to the backend for review at the hidden #feedback page.
+
+function openFeedbackModal() {
+  const overlay = h(`<div class="modal-overlay">
+    <div class="modal-card">
+      <h3 class="modal-title">Send feedback</h3>
+      <div class="field"><label>Type</label>
+        <div class="seg fb-kind">
+          <button type="button" class="active" data-k="bug">Bug</button>
+          <button type="button" data-k="feature">Feature</button>
+          <button type="button" data-k="other">Other</button>
+        </div>
+      </div>
+      <div class="field"><label>What's up?</label>
+        <textarea class="fb-text" rows="4" placeholder="Describe the bug, or the feature you'd like..."></textarea></div>
+      <div class="field"><label>Your name (optional)</label>
+        <input type="text" class="fb-name" placeholder="Anonymous"></div>
+      <div class="modal-actions">
+        <button class="act ghost modal-cancel">Cancel</button>
+        <button class="act modal-send">Send</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  let kind: FeedbackKind = "bug";
+  overlay.querySelectorAll(".fb-kind button").forEach((b) => {
+    (b as HTMLButtonElement).onclick = () => {
+      kind = (b as HTMLElement).dataset.k as FeedbackKind;
+      overlay.querySelectorAll(".fb-kind button").forEach((x) => x.classList.toggle("active", x === b));
+    };
+  });
+  const textArea = overlay.querySelector(".fb-text") as HTMLTextAreaElement;
+  const nameInput = overlay.querySelector(".fb-name") as HTMLInputElement;
+  const sendBtn = overlay.querySelector(".modal-send") as HTMLButtonElement;
+  function close() {
+    overlay.remove();
+  }
+  overlay.addEventListener("pointerdown", (e) => {
+    if (e.target === overlay) close();
+  });
+  (overlay.querySelector(".modal-cancel") as HTMLButtonElement).onclick = close;
+  textArea.focus();
+  sendBtn.onclick = async () => {
+    const text = textArea.value.trim();
+    if (!text) return;
+    sendBtn.textContent = "Sending…";
+    sendBtn.disabled = true;
+    const res = await submitFeedback(kind, text, nameInput.value.trim());
+    if (res.ok) {
+      (overlay.querySelector(".modal-card") as HTMLElement).innerHTML = `
+        <h3 class="modal-title">Sent — thanks ✓</h3>
+        <div class="modal-actions"><button class="act modal-close">Close</button></div>`;
+      (overlay.querySelector(".modal-close") as HTMLButtonElement).onclick = close;
+    } else {
+      sendBtn.textContent = "Failed — try again";
+      sendBtn.disabled = false;
+    }
+  };
 }
 
 // --- transform tool -----------------------------------------------------------
@@ -1351,6 +1579,7 @@ function buildRight() {
   section(rightPanel, "composition", "Composition", true, compControls);
   section(rightPanel, "photo", "Photo", false, photoLibraryControls);
   section(rightPanel, "bg", "Background texture", false, bgTextureControls);
+  section(rightPanel, "palette", "Palette lab (temporary)", false, paletteLabControls);
   section(rightPanel, "words", "Words", true, fieldControls);
   section(rightPanel, "texts", "Text boxes", true, textBoxesControls);
   section(rightPanel, "signature", "Signature · F·O·L·D net", true, sigControls);
@@ -1480,6 +1709,324 @@ function buildCanon() {
   </div>`;
 }
 
+// --- hidden internal tools -----------------------------------------------------
+// #tune, #moderate, #feedback: standalone pages, never linked from #nav,
+// reached only by typing the URL. Each renders a full-viewport overlay on
+// top of the normal app shell (which still boots underneath — harmless idle
+// work) rather than plugging into the Make/Gallery/Canon view system.
+
+// Shared bearer-token prompt for the two moderation pages: shows a small
+// form if no token is saved yet, otherwise calls straight through.
+function tokenGate(container: HTMLElement, onToken: (token: string) => void) {
+  const saved = loadModToken();
+  if (saved) {
+    onToken(saved);
+    return;
+  }
+  container.innerHTML = "";
+  const wrap = h(`<div class="token-gate">
+    <p class="note">Paste the moderation bearer token to continue. Stored only in this browser.</p>
+    <input type="password" class="tg-input" placeholder="Bearer token">
+    <button class="act tg-go" style="margin-top:10px">Continue</button>
+  </div>`);
+  container.appendChild(wrap);
+  const input = wrap.querySelector(".tg-input") as HTMLInputElement;
+  input.focus();
+  const go = () => {
+    const t = input.value.trim();
+    if (!t) return;
+    saveModToken(t);
+    onToken(t);
+  };
+  (wrap.querySelector(".tg-go") as HTMLButtonElement).onclick = go;
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") go();
+  };
+}
+
+function hiddenPageShell(title: string, blurb: string): { overlay: HTMLElement; body: HTMLElement } {
+  const overlay = h(`<div class="hidden-page"><div class="hp-inner">
+    <button type="button" class="hp-close mini">✕ Close</button>
+    <h1>${title}</h1>
+    <div class="hp-sub">${blurb}</div>
+    <div class="hp-body"></div>
+  </div></div>`);
+  document.body.appendChild(overlay);
+  (overlay.querySelector(".hp-close") as HTMLButtonElement).onclick = () => {
+    overlay.remove();
+    history.replaceState(null, "", location.pathname + location.search);
+  };
+  return { overlay, body: overlay.querySelector(".hp-body") as HTMLElement };
+}
+
+// #tune — the one team member refining the signature dials it here: a big
+// preview, every SIG_PARAMS slider, and a local log of notes (what's
+// working, what's not) they can export and hand off.
+function buildTuneView() {
+  const { body } = hiddenPageShell(
+    "Signature tuning",
+    "Hidden internal tool — not linked from the nav. Dial the F·O·L·D net, leave a note, move on."
+  );
+  const preview = h(`<div class="tune-preview"></div>`);
+  const controls = h(`<div class="tune-controls"></div>`);
+  const commentField = h(`<div class="field"><label>Comment</label>
+    <textarea class="tune-comment" rows="3" placeholder="What's working, what's not..."></textarea></div>`);
+  const ratingSeg = h(`<div class="seg" style="margin-bottom:10px">
+    <button type="button" data-r="up">👍 Good</button>
+    <button type="button" data-r="down">👎 Not it</button>
+  </div>`);
+  const actions = h(`<div class="row">
+    <button type="button" class="act tune-save">Save note</button>
+    <button type="button" class="act ghost tune-export">Export JSON</button>
+  </div>`);
+  const logHeader = h(`<h3 class="panel-title" style="margin-top:30px">Saved notes</h3>`);
+  const log = h(`<div class="tune-log"></div>`);
+  body.append(preview, controls, commentField, ratingSeg, actions, logHeader, log);
+
+  let seed = Math.floor(Math.random() * 100000);
+  let params = defaultSigParams();
+  let rating: "up" | "down" | "" = "";
+  const TUNE_GROUND = "#FFF9F1";
+  const TUNE_INK = "#03071B";
+
+  function renderPreview() {
+    const pairs = [
+      { ground: "#FFF9F1", ink: "#03071B" },
+      { ground: "#03071B", ink: "#FFF9F1" },
+    ];
+    preview.innerHTML = pairs
+      .map(({ ground, ink }) => {
+        const inner = SIGNATURE_ENGINE.render({ w: 280, h: 200, p: sigEngineParams(params), colors: [], ink, ground, seed });
+        return `<div class="tune-swatch" style="background:${ground}"><svg viewBox="0 0 280 200">${inner}</svg></div>`;
+      })
+      .join("");
+  }
+
+  function renderControls() {
+    controls.innerHTML = "";
+    const randomize = h(`<button type="button" class="act ghost" style="margin-bottom:14px">🎲 Randomize</button>`);
+    randomize.onclick = () => {
+      seed = Math.floor(Math.random() * 100000);
+      for (const p of SIG_PARAMS) {
+        const v = p.min + Math.random() * (p.max - p.min);
+        params[p.key] = Math.min(p.max, Math.max(p.min, Math.round(v / p.step) * p.step));
+      }
+      renderPreview();
+      renderControls();
+    };
+    controls.appendChild(randomize);
+    for (const p of SIG_PARAMS) {
+      const f = h(`<div class="field"><label>${p.label}</label></div>`);
+      const r = h(
+        `<input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${params[p.key]}">`
+      ) as HTMLInputElement;
+      r.oninput = () => {
+        params[p.key] = Number(r.value);
+        renderPreview();
+      };
+      f.appendChild(r);
+      controls.appendChild(f);
+    }
+  }
+
+  ratingSeg.querySelectorAll("button").forEach((b) => {
+    (b as HTMLButtonElement).onclick = () => {
+      const r = (b as HTMLElement).dataset.r as "up" | "down";
+      rating = rating === r ? "" : r;
+      ratingSeg
+        .querySelectorAll("button")
+        .forEach((x) => x.classList.toggle("active", (x as HTMLElement).dataset.r === rating));
+    };
+  });
+
+  function renderLog() {
+    const samples = loadSamples();
+    log.innerHTML = "";
+    if (!samples.length) {
+      log.appendChild(h(`<div class="note">Nothing saved yet.</div>`));
+      return;
+    }
+    for (const s of samples) {
+      const inner = SIGNATURE_ENGINE.render({ w: 72, h: 72, p: sigEngineParams(s.params), colors: [], ink: s.ink, ground: s.ground, seed: s.seed });
+      const card = h(`<div class="hp-card">
+        <div class="thumb" style="background:${s.ground}"><svg viewBox="0 0 72 72">${inner}</svg></div>
+        <div class="body">
+          <div class="hp-comment"></div>
+          <div class="meta"></div>
+        </div>
+      </div>`);
+      (card.querySelector(".hp-comment") as HTMLElement).textContent =
+        (s.rating === "up" ? "👍 " : s.rating === "down" ? "👎 " : "") + (s.comment || "(no comment)");
+      (card.querySelector(".meta") as HTMLElement).textContent =
+        `${new Date(s.createdAt).toLocaleString()} · seed ${s.seed}`;
+      const del = h(`<button type="button" class="mini">✕</button>`);
+      del.onclick = () => {
+        removeSample(s.id);
+        renderLog();
+      };
+      (card.querySelector(".body") as HTMLElement).appendChild(del);
+      log.appendChild(card);
+    }
+  }
+
+  (actions.querySelector(".tune-save") as HTMLButtonElement).onclick = () => {
+    const commentEl = commentField.querySelector(".tune-comment") as HTMLTextAreaElement;
+    addSample({ seed, params: { ...params }, ground: TUNE_GROUND, ink: TUNE_INK, comment: commentEl.value.trim(), rating });
+    commentEl.value = "";
+    rating = "";
+    ratingSeg.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    renderLog();
+  };
+  (actions.querySelector(".tune-export") as HTMLButtonElement).onclick = async (e) => {
+    await navigator.clipboard.writeText(exportSamplesJson());
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.textContent = "Copied ✓";
+    setTimeout(() => (btn.textContent = "Export JSON"), 1400);
+  };
+
+  renderPreview();
+  renderControls();
+  renderLog();
+}
+
+// #moderate — approve or deny photos the community submitted for the
+// shared house library.
+function buildModerateView() {
+  const { body } = hiddenPageShell(
+    "Photo moderation",
+    "Hidden internal tool. Approve or deny community photo submissions."
+  );
+  if (!FOLD_API) {
+    body.appendChild(h(`<div class="note">No backend configured (VITE_FOLD_API is unset) — nothing to moderate.</div>`));
+    return;
+  }
+  const base = FOLD_API;
+
+  async function loadList(token: string) {
+    body.innerHTML = `<div class="note">Loading…</div>`;
+    const res = await fetchPendingPhotos(base, token);
+    body.innerHTML = "";
+    if (!res.ok) {
+      const msg = h(`<div class="note"></div>`);
+      msg.textContent = res.error;
+      body.appendChild(msg);
+      if (res.error === "Invalid token.") {
+        const retry = h(`<button type="button" class="mini" style="margin-top:8px">Try another token</button>`);
+        retry.onclick = () => {
+          saveModToken("");
+          tokenGate(body, loadList);
+        };
+        body.appendChild(retry);
+      }
+      return;
+    }
+    if (!res.data.length) {
+      body.appendChild(h(`<div class="note">Nothing pending.</div>`));
+      return;
+    }
+    for (const p of res.data) {
+      const card = h(`<div class="hp-card">
+        <div class="thumb"><img></div>
+        <div class="body">
+          <div class="hp-name"></div>
+          <div class="meta hp-submitter"></div>
+          <div class="row" style="margin-top:10px"></div>
+        </div>
+      </div>`);
+      (card.querySelector("img") as HTMLImageElement).src = p.url;
+      (card.querySelector(".hp-name") as HTMLElement).textContent = p.name;
+      (card.querySelector(".hp-submitter") as HTMLElement).textContent = p.submitter
+        ? `submitted by ${p.submitter}`
+        : "submitted anonymously";
+      const row = card.querySelector(".row") as HTMLElement;
+      const approve = h(`<button type="button" class="mini">✓ Approve</button>`);
+      approve.onclick = async () => {
+        approve.textContent = "…";
+        await approvePhoto(base, p.id, token);
+        loadList(token);
+      };
+      const deny = h(`<button type="button" class="mini">✕ Deny</button>`);
+      deny.onclick = async () => {
+        deny.textContent = "…";
+        await denyPhoto(base, p.id, token);
+        loadList(token);
+      };
+      row.append(approve, deny);
+      body.appendChild(card);
+    }
+  }
+
+  tokenGate(body, loadList);
+}
+
+// #feedback — the bug-report / feature-request inbox anyone can post to
+// from the topbar button; this is where it gets reviewed.
+function buildFeedbackView() {
+  const { body } = hiddenPageShell(
+    "Feedback inbox",
+    "Hidden internal tool. Bug reports and feature requests sent from the app."
+  );
+  if (!FOLD_API) {
+    body.appendChild(h(`<div class="note">No backend configured (VITE_FOLD_API is unset) — nothing to show.</div>`));
+    return;
+  }
+  const base = FOLD_API;
+
+  async function loadList(token: string) {
+    body.innerHTML = `<div class="note">Loading…</div>`;
+    const res = await fetchFeedback(base, token);
+    body.innerHTML = "";
+    if (!res.ok) {
+      const msg = h(`<div class="note"></div>`);
+      msg.textContent = res.error;
+      body.appendChild(msg);
+      if (res.error === "Invalid token.") {
+        const retry = h(`<button type="button" class="mini" style="margin-top:8px">Try another token</button>`);
+        retry.onclick = () => {
+          saveModToken("");
+          tokenGate(body, loadList);
+        };
+        body.appendChild(retry);
+      }
+      return;
+    }
+    if (!res.data.length) {
+      body.appendChild(h(`<div class="note">Nothing yet.</div>`));
+      return;
+    }
+    for (const item of res.data) {
+      const card = h(`<div class="hp-card">
+        <div class="body">
+          <span class="hp-badge"></span>
+          <div class="hp-text" style="margin-top:6px"></div>
+          <div class="meta hp-meta"></div>
+          <div class="row" style="margin-top:10px"></div>
+        </div>
+      </div>`);
+      if (item.status === "done") card.style.opacity = "0.55";
+      (card.querySelector(".hp-badge") as HTMLElement).textContent = item.kind;
+      (card.querySelector(".hp-text") as HTMLElement).textContent = item.text;
+      (card.querySelector(".hp-meta") as HTMLElement).textContent =
+        `${new Date(item.created_at).toLocaleString()}${item.name ? ` · ${item.name}` : ""}${item.context ? ` · ${item.context}` : ""}`;
+      const row = card.querySelector(".row") as HTMLElement;
+      const toggle = h(`<button type="button" class="mini">${item.status === "done" ? "↺ Reopen" : "✓ Mark done"}</button>`);
+      toggle.onclick = async () => {
+        await setFeedbackStatus(base, item.id, item.status === "done" ? "new" : "done", token);
+        loadList(token);
+      };
+      const del = h(`<button type="button" class="mini">✕ Delete</button>`);
+      del.onclick = async () => {
+        await deleteFeedback(base, item.id, token);
+        loadList(token);
+      };
+      row.append(toggle, del);
+      body.appendChild(card);
+    }
+  }
+
+  tokenGate(body, loadList);
+}
+
 // --- view switching ----------------------------------------------------------
 
 function switchView(name: string) {
@@ -1537,3 +2084,16 @@ const refresh = () => {
 loadMarks(refresh);
 loadPhotos(refresh);
 loadCutouts(refresh);
+
+// Topbar feedback button — hidden entirely when there's no backend to send
+// reports to (mirrors how other backend-optional features degrade).
+if (FOLD_API) {
+  const feedbackBtn = $("#feedbackBtn");
+  feedbackBtn.style.display = "";
+  feedbackBtn.onclick = () => openFeedbackModal();
+}
+
+// Hidden internal tools — no #nav entry, reached by typing the URL.
+if (location.hash === "#tune") buildTuneView();
+if (location.hash === "#moderate") buildModerateView();
+if (location.hash === "#feedback") buildFeedbackView();

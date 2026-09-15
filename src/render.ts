@@ -106,7 +106,7 @@ function signatureSvg(doc: Doc, x: number, y: number, w: number, h: number, ink:
   const inner = SIGNATURE_ENGINE.render({
     w,
     h,
-    p: sigEngineParams(doc),
+    p: sigEngineParams(doc.comp.sig.params),
     colors: [],
     ink,
     ground: "none",
@@ -858,7 +858,7 @@ function splitSigSvg(
 ): string {
   const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
   const st = doc.comp.xf?.sig;
-  const discs = netInk({ w: box.w, h: box.h, p: sigEngineParams(doc), seed: doc.comp.sig.seed })
+  const discs = netInk({ w: box.w, h: box.h, p: sigEngineParams(doc.comp.sig.params), seed: doc.comp.sig.seed })
     .map((d: { x: number; y: number; r: number }) => ({
       ...xfPt(st, cx, cy, box.x + d.x, box.y + d.y),
       r: d.r * (st?.s ?? 1),
@@ -866,10 +866,11 @@ function splitSigSvg(
   return splitInkSvg(doc, "sig", cx, cy, discs, (ink) => signatureSvg(doc, box.x, box.y, box.w, box.h, ink), W, H, heroBottom);
 }
 
-// The effective engine params the signature renders with — shared with
-// netExtent so balance math sees exactly the mark that gets drawn.
-function sigEngineParams(doc: Doc): Record<string, number> {
-  const sp = doc.comp.sig.params;
+// The effective engine params the signature renders with, given the raw
+// SIG_PARAMS values (doc.comp.sig.params, or a standalone tuning sample) —
+// shared with netExtent so balance math sees exactly the mark that gets
+// drawn, and with the #tune hidden page so its preview matches production.
+export function sigEngineParams(sp: Record<string, number>): Record<string, number> {
   // even: 1 — the signature reads as a wordmark, so its four letters stay
   // the same size (unlike the general network motif's sketch-page jitter).
   return { ...sp, tiles: 1, size: (sp.size ?? 1) * 2.2, weight: (sp.weight ?? 1) * 3, even: 1 };
@@ -1048,7 +1049,7 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
       const titleBoundary = row0.hasAny ? row0.farEdge - c.chipSize * 0.8 : row0.farEdge;
       // balance against the mark's actual ink extent, not its box — a narrow
       // two-row net leaves the box half-empty and would skew the title right
-      const ext = netExtent({ w: sigW, h: sigH, p: sigEngineParams(doc), seed: comp.sig.seed });
+      const ext = netExtent({ w: sigW, h: sigH, p: sigEngineParams(doc.comp.sig.params), seed: comp.sig.seed });
       const titleX = sigX + ext.x1 + c.titleSize * 0.5;
       const maxW = Math.max(60, titleBoundary - titleX);
       const { size } = fitTitle(title, c.titleSize, maxW);

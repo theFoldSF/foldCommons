@@ -106,6 +106,36 @@ export interface TextBoxState {
   frameSeed: number;
 }
 
+// Shuffle locks: when a key is true, shuffleComp() leaves that slot alone.
+export type LockKey =
+  | "layout"
+  | "frame"
+  | "photo"
+  | "bg"
+  | "panelAccent"
+  | "chips"
+  | "titlePlate"
+  | "words"
+  | "arrange"
+  | "groundRegister"
+  | "motif"
+  | "signature";
+
+export const LOCK_KEYS: LockKey[] = [
+  "layout",
+  "frame",
+  "photo",
+  "bg",
+  "panelAccent",
+  "chips",
+  "titlePlate",
+  "words",
+  "arrange",
+  "groundRegister",
+  "motif",
+  "signature",
+];
+
 export interface CompState {
   layout: LayoutKey;
   frame: string; // frame shape id
@@ -125,6 +155,11 @@ export interface CompState {
   titleFrame: string; // frame shape id for the title's contrast plate
   titleFrameSeed: number;
   xf: Partial<Record<XfKey, XfState>>; // per-element free transform
+  locks?: Partial<Record<LockKey, boolean>>; // shuffleComp() skips locked slots
+  // Palette lab — temporary escape hatch while the design team dials accent
+  // colors; when set, replaces the active register's accent list wherever
+  // docAccent()/docAccents() resolve one. Not canon; explicitly experimental.
+  paletteOverride?: { accents: string[] };
 }
 
 export interface Doc {
@@ -222,8 +257,8 @@ export function newDoc(templateId: string): Doc {
 // fill sitting right behind them, and keeps the scallop mark from showing up
 // in too many places at once.
 function finalizeComp(doc: Doc): Doc {
-  avoidChipFrameClash(doc);
-  avoidScallopOverload(doc);
+  if (!doc.comp.locks?.chips) avoidChipFrameClash(doc);
+  if (!doc.comp.locks?.titlePlate) avoidScallopOverload(doc);
   return doc;
 }
 
@@ -256,10 +291,18 @@ export function newTextBoxId(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
+// The accent list docAccent() indexes into: a palette-lab override when one
+// is set, otherwise the active register's accents with the ground color
+// excluded so a chip/accent never lands invisibly on top of a matching ground.
+export function docAccents(doc: Doc): string[] {
+  if (doc.comp.paletteOverride?.accents.length) return doc.comp.paletteOverride.accents;
+  return REGISTERS[doc.register].accents.filter((a) => a !== docGround(doc).hex);
+}
+
 // How many accent indexes are actually pickable for this doc (docAccent's own
-// modulus) — the ground color is excluded, same as docAccent.
+// modulus).
 function accentCount(doc: Doc): number {
-  return REGISTERS[doc.register].accents.filter((a) => a !== docGround(doc).hex).length;
+  return docAccents(doc).length;
 }
 
 // True when the layout currently shows a flat accent fill behind the words —
@@ -293,53 +336,82 @@ export function docGround(doc: Doc) {
 }
 
 export function docAccent(doc: Doc, idx: number): string {
-  const reg = REGISTERS[doc.register];
-  const accents = reg.accents.filter((a) => a !== docGround(doc).hex);
+  const accents = docAccents(doc);
   return accents[((idx % accents.length) + accents.length) % accents.length];
 }
 
 // One tap → a genuinely different composition, still entirely inside canon.
+// Any slot named in doc.comp.locks is left exactly as it was.
 export function shuffleComp(doc: Doc) {
   const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+  const locks = doc.comp.locks ?? {};
+
   // an upload is the member's deliberate choice — keep it; otherwise re-draw
   // the framed photo from the house library
-  if (!doc.comp.upload && PHOTOS.length) doc.comp.photo = pick(PHOTOS).id;
+  if (!locks.photo && !doc.comp.upload && PHOTOS.length) doc.comp.photo = pick(PHOTOS).id;
   const hasPhoto = !!(doc.comp.upload || doc.comp.photo);
-  const layouts: LayoutKey[] = hasPhoto
-    ? ["hero", "hero", "backdrop", "collage", "motif", "panel"]
-    : ["panel", "motif", "motif", "hero"];
-  doc.comp.layout = pick(layouts);
+  if (!locks.layout) {
+    const layouts: LayoutKey[] = hasPhoto
+      ? ["hero", "hero", "backdrop", "collage", "motif", "panel"]
+      : ["panel", "motif", "motif", "hero"];
+    doc.comp.layout = pick(layouts);
+  }
   // pick the motif engine before the frame, so a drape-heavy motif (Drape
   // lines, Draped quilt) can exclude the Drape frame — no drape-on-drape.
-  const engine = pick(ENGINES);
-  const frameChoices =
-    engine.id === "flow" || engine.id === "cloth" ? FRAMES.filter((f) => f.id !== "drape") : FRAMES;
-  doc.comp.frame = pick(frameChoices).id;
-  doc.comp.frameSeed = Math.floor(Math.random() * 100000);
+  // When the motif itself is locked, base the frame exclusion on the doc's
+  // current engine instead of rolling a fresh one.
+  const engine = locks.motif ? engineById(doc.motif?.engine ?? "") ?? pick(ENGINES) : pick(ENGINES);
+  if (!locks.frame) {
+    const frameChoices =
+      engine.id === "flow" || engine.id === "cloth" ? FRAMES.filter((f) => f.id !== "drape") : FRAMES;
+    doc.comp.frame = pick(frameChoices).id;
+    doc.comp.frameSeed = Math.floor(Math.random() * 100000);
+  }
   // background texture: collage always gets one; other layouts sometimes
-  if (PHOTOS.length && (doc.comp.layout === "collage" || Math.random() < 0.35)) {
-    const framed = doc.comp.upload ? "" : doc.comp.photo;
-    doc.comp.bg = pick(PHOTOS.filter((p) => p.id !== framed).concat(PHOTOS.slice(0, 1))).id;
-    doc.comp.bgFade = BG_FADE.min + Math.random() * (BG_FADE.max - BG_FADE.min);
-  } else doc.comp.bg = "";
-  doc.comp.panelAccent = Math.floor(Math.random() * 4);
-  doc.comp.sig.seed = Math.floor(Math.random() * 100000);
-  doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
-  doc.comp.chipStyle = pick<ChipStyle>(["ticket", "scallop", "line"]);
-  doc.comp.titleFrame = pick(PLATE_FRAMES).id;
-  doc.comp.titleFrameSeed = Math.floor(Math.random() * 100000);
-  doc.comp.words = pick<WordsLayout>(["band", "corners", "stack"]);
-  doc.comp.arrange = Math.floor(Math.random() * ARRANGEMENTS.length);
-  doc.comp.xf = {};
-  doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
-  doc.register = docGround(doc).register;
+  if (!locks.bg) {
+    if (PHOTOS.length && (doc.comp.layout === "collage" || Math.random() < 0.35)) {
+      const framed = doc.comp.upload ? "" : doc.comp.photo;
+      doc.comp.bg = pick(PHOTOS.filter((p) => p.id !== framed).concat(PHOTOS.slice(0, 1))).id;
+      doc.comp.bgFade = BG_FADE.min + Math.random() * (BG_FADE.max - BG_FADE.min);
+    } else doc.comp.bg = "";
+  }
+  if (!locks.panelAccent) doc.comp.panelAccent = Math.floor(Math.random() * 4);
+  if (!locks.signature) doc.comp.sig.seed = Math.floor(Math.random() * 100000);
+  if (!locks.chips) {
+    doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
+    doc.comp.chipStyle = pick<ChipStyle>(["ticket", "scallop", "line"]);
+  }
+  if (!locks.titlePlate) {
+    doc.comp.titleFrame = pick(PLATE_FRAMES).id;
+    doc.comp.titleFrameSeed = Math.floor(Math.random() * 100000);
+  }
+  if (!locks.words) doc.comp.words = pick<WordsLayout>(["band", "corners", "stack"]);
+  if (!locks.arrange) doc.comp.arrange = Math.floor(Math.random() * ARRANGEMENTS.length);
+  // wipe manual transforms only for slots that actually just moved — a
+  // locked element's deliberate placement shouldn't be reset under it.
+  const xf = { ...doc.comp.xf };
+  if (!locks.photo) delete xf.photo;
+  if (!locks.motif) delete xf.motif;
+  if (!locks.signature) delete xf.sig;
+  if (!locks.titlePlate) delete xf.title;
+  if (!locks.chips) {
+    delete xf.date;
+    delete xf.time;
+  }
+  doc.comp.xf = xf;
+  if (!locks.groundRegister) {
+    doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
+    doc.register = docGround(doc).register;
+  }
   // a different motif engine each roll, params drawn from curated ranges
-  doc.motif = {
-    engine: engine.id,
-    seed: Math.floor(Math.random() * 100000),
-    params: shuffleParams(engine),
-    accents: doc.motif?.accents ?? [4, 0],
-  };
+  if (!locks.motif) {
+    doc.motif = {
+      engine: engine.id,
+      seed: Math.floor(Math.random() * 100000),
+      params: shuffleParams(engine),
+      accents: doc.motif?.accents ?? [4, 0],
+    };
+  }
   finalizeComp(doc);
 }
 
@@ -408,6 +480,22 @@ export function sanitize(doc: Doc): Doc {
   doc.comp.sigOn = doc.comp.sigOn !== false;
   if (!PLATE_FRAMES.some((f) => f.id === doc.comp.titleFrame)) doc.comp.titleFrame = PLATE_FRAMES[0].id;
   doc.comp.titleFrameSeed = Number.isFinite(doc.comp.titleFrameSeed) ? doc.comp.titleFrameSeed >>> 0 : 11;
+
+  // shuffle locks: unknown keys (hand-edited links, renamed slots) dropped;
+  // only true booleans kept.
+  const rawLocks = (doc.comp as unknown as { locks?: Record<string, unknown> }).locks;
+  const cleanLocks: Partial<Record<LockKey, boolean>> = {};
+  for (const k of LOCK_KEYS) if (rawLocks?.[k] === true) cleanLocks[k] = true;
+  doc.comp.locks = cleanLocks;
+
+  // palette lab override: valid #rrggbb strings only, 2-8 of them, else no override.
+  const HEX = /^#[0-9a-fA-F]{6}$/;
+  const rawAccents = (doc.comp as unknown as { paletteOverride?: { accents?: unknown } }).paletteOverride
+    ?.accents;
+  const cleanAccents = Array.isArray(rawAccents)
+    ? rawAccents.filter((a): a is string => typeof a === "string" && HEX.test(a)).slice(0, 8)
+    : [];
+  doc.comp.paletteOverride = cleanAccents.length >= 2 ? { accents: cleanAccents } : undefined;
 
   // pre-prose / pre-text-box docs: fold the old `detail` line into `prose`,
   // then `prose` into the first text box — a v1/v2 share link must still

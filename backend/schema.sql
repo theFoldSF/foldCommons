@@ -10,3 +10,13 @@ CREATE TABLE IF NOT EXISTS gallery (
   doc TEXT NOT NULL,       -- JSON text: the full sanitized, shareable Doc
   created_at TEXT NOT NULL -- ISO 8601
 );
+
+CREATE TABLE IF NOT EXISTS feedback (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,          -- 'bug' | 'feature' | 'other'
+  text TEXT NOT NULL,
+  name TEXT,
+  context TEXT,                -- e.g. the reporter's URL hash, for repro context
+  status TEXT NOT NULL DEFAULT 'new', -- 'new' | 'done'
+  created_at TEXT NOT NULL     -- ISO 8601
+);
