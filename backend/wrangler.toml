@@ -14,13 +14,18 @@ account_id = "3e871b0b1eb6ba48da27e2b9bd6a667d"
 binding = "PHOTOS_BUCKET"
 bucket_name = "fold-commons"
 
-# CORS origin allowed to call this worker — a single origin, not a list.
-# Set to the production app origin. Note the consequence for local dev: a
-# `bun run dev` frontend on http://localhost:5173 will be refused by CORS if
-# it points at the *deployed* worker. For local work, run the worker locally
-# too (`bun run dev` in this directory) rather than loosening this back to "*".
+# Comma-separated list of origins allowed to call this worker. Each entry may
+# contain `*`, which matches only [A-Za-z0-9-] and so cannot cross a dot —
+# "https://fold-commons-*.vercel.app" covers Vercel preview deployments
+# without also matching "https://fold-commons-x.attacker.com".
+#
+# The first entry is the canonical production origin: it is what a caller with
+# no Origin header at all (curl, server-to-server) gets back.
+#
+# Local dev is deliberately absent. Point a local frontend at a local worker
+# (`bun run dev` here) rather than adding localhost to the deployed allowlist.
 [vars]
-ALLOWED_ORIGIN = "https://fold-commons.vercel.app"
+ALLOWED_ORIGIN = "https://fold-commons.vercel.app,https://fold-commons-*.vercel.app"
 
 # UPLOAD_TOKEN is a secret, not a var — never checked into wrangler.toml.
 # Set it once per environment with:

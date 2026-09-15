@@ -69,11 +69,46 @@ interface SigSampleRow {
   created_at: string;
 }
 
-function corsHeaders(env: Env): HeadersInit {
+// ALLOWED_ORIGIN is a comma-separated list of exact origins, each of which
+// may contain `*` wildcards — "https://fold-commons-*.vercel.app" covers
+// Vercel preview deployments, whose URLs carry a per-deployment hash.
+//
+// A wildcard matches only [A-Za-z0-9-], never a dot, so it cannot cross a
+// domain-label boundary: "https://fold-commons-*.vercel.app" will not match
+// "https://fold-commons-anything.attacker.com".
+function originMatches(pattern: string, origin: string): boolean {
+  if (pattern === "*" || pattern === origin) return true;
+  if (!pattern.includes("*")) return false;
+  const rx = pattern
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[A-Za-z0-9-]*");
+  return new RegExp(`^${rx}$`).test(origin);
+}
+
+// Echo back the caller's own origin when it is allowed, rather than a fixed
+// string — a single Access-Control-Allow-Origin value cannot cover both the
+// production domain and the preview deployments at once.
+function resolveAllowedOrigin(request: Request, env: Env): string {
+  const patterns = (env.ALLOWED_ORIGIN || "*")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (patterns.includes("*")) return "*";
+  const origin = request.headers.get("Origin");
+  // No Origin header at all (curl, server-to-server) — nothing to match
+  // against, so fall back to the canonical production origin.
+  if (!origin) return patterns[0] ?? "*";
+  return patterns.some((p) => originMatches(p, origin)) ? origin : patterns[0] ?? "*";
+}
+
+function corsHeaders(env: Env, request: Request): HeadersInit {
   return {
-    "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
+    "Access-Control-Allow-Origin": resolveAllowedOrigin(request, env),
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    // The response varies per caller now, so caches must key on Origin.
+    Vary: "Origin",
   };
 }
 
@@ -85,10 +120,11 @@ function isAuthorized(request: Request, env: Env): boolean {
   return !!env.UPLOAD_TOKEN && authHeader === `Bearer ${env.UPLOAD_TOKEN}`;
 }
 
+// CORS is not applied here — the fetch handler decorates every outgoing
+// response in one place, so handlers never have to think about it.
 function json(data: unknown, env: Env, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
-  for (const [k, v] of Object.entries(corsHeaders(env))) headers.set(k, v);
   return new Response(JSON.stringify(data), { ...init, headers });
 }
 
@@ -272,7 +308,7 @@ async function deletePhoto(id: string, request: Request, env: Env): Promise<Resp
     return json({ error: "Not found" }, env, { status: 404 });
   }
   await env.PHOTOS_BUCKET.delete(id);
-  return new Response(null, { status: 204, headers: corsHeaders(env) });
+  return new Response(null, { status: 204 });
 }
 
 async function getPhoto(id: string, env: Env): Promise<Response> {
@@ -284,7 +320,6 @@ async function getPhoto(id: string, env: Env): Promise<Response> {
   object.writeHttpMetadata(headers);
   headers.set("Cache-Control", "public, max-age=31536000, immutable");
   headers.set("ETag", object.httpEtag);
-  for (const [k, v] of Object.entries(corsHeaders(env))) headers.set(k, v);
   return new Response(object.body, { headers });
 }
 
@@ -351,7 +386,7 @@ async function deleteGalleryItem(id: string, request: Request, env: Env): Promis
   if (!meta.changes) {
     return json({ error: "Not found" }, env, { status: 404 });
   }
-  return new Response(null, { status: 204, headers: corsHeaders(env) });
+  return new Response(null, { status: 204 });
 }
 
 const MAX_FEEDBACK_TEXT_LEN = 4000;
@@ -422,7 +457,7 @@ async function deleteFeedbackItem(id: string, env: Env): Promise<Response> {
   if (!meta.changes) {
     return json({ error: "Not found" }, env, { status: 404 });
   }
-  return new Response(null, { status: 204, headers: corsHeaders(env) });
+  return new Response(null, { status: 204 });
 }
 
 const MAX_SIG_COMMENT_LEN = 2000;
@@ -516,16 +551,16 @@ async function deleteSigSample(id: string, env: Env): Promise<Response> {
   if (!meta.changes) {
     return json({ error: "Not found" }, env, { status: 404 });
   }
-  return new Response(null, { status: 204, headers: corsHeaders(env) });
+  return new Response(null, { status: 204 });
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+async function route(request: Request, env: Env): Promise<Response> {
+  {
     const url = new URL(request.url);
     const origin = url.origin;
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders(env) });
+      return new Response(null, { status: 204 });
     }
 
     try {
@@ -596,5 +631,17 @@ export default {
     } catch (err) {
       return json({ error: "Internal error", detail: String(err) }, env, { status: 500 });
     }
+  }
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const res = await route(request, env);
+    // One place decorates every response — including 401s, 404s and the
+    // 500 catch-all, so a browser sees a real error instead of an opaque
+    // CORS failure masking it.
+    const out = new Response(res.body, res);
+    for (const [k, v] of Object.entries(corsHeaders(env, request))) out.headers.set(k, v);
+    return out;
   },
 } satisfies ExportedHandler<Env>;
