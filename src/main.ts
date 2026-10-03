@@ -1648,18 +1648,8 @@ function resetXf(key: XfKey) {
   renderCanvas();
 }
 
-// Apply an xf to a point given the pivot (cx,cy) — mirrors render.ts's
-// translate(cx,cy) rotate(rot) scale(s) translate(-cx,-cy) translate(dx,dy).
-function applyXf(p: { x: number; y: number }, cx: number, cy: number, xf: XfState) {
-  const rad = (xf.rot * Math.PI) / 180;
-  const cos = Math.cos(rad), sin = Math.sin(rad);
-  const lx = (p.x - cx + xf.dx) * xf.sx;
-  const ly = (p.y - cy + xf.dy) * xf.sy;
-  return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos };
-}
-
 function xfTransformAttr(cx: number, cy: number, xf: XfState): string {
-  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${xf.rot.toFixed(2)}) scale(${xf.sx.toFixed(4)} ${xf.sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${xf.dx.toFixed(2)} ${xf.dy.toFixed(2)})`;
+  return `translate(${xf.dx.toFixed(2)} ${xf.dy.toFixed(2)}) translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${xf.rot.toFixed(2)}) scale(${xf.sx.toFixed(4)} ${xf.sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`;
 }
 
 // Which handle is being dragged, in normalized element space: -1/0/1 on each
@@ -1852,7 +1842,9 @@ function startDrag(e: PointerEvent, key: XfKey, g: SVGGElement, mode: DragState[
   const hw = bbox.width / 2, hh = bbox.height / 2;
   const xf0 = getXf(key);
   const world = svgPoint(svg, e.clientX, e.clientY);
-  const pivotWorld = applyXf({ x: cx, y: cy }, cx, cy, xf0);
+  // The visible center — which, with the translation outside the rotation, is
+  // also exactly what the element rotates and scales about.
+  const pivotWorld = { x: cx + xf0.dx, y: cy + xf0.dy };
   const startAngle =
     mode === "rotate" ? Math.atan2(world.y - pivotWorld.y, world.x - pivotWorld.x) : 0;
   // Where the pointer landed vs. where the handle actually is, in the
@@ -1874,16 +1866,11 @@ function onDragMove(e: PointerEvent) {
   const world = svgPoint(svg, e.clientX, e.clientY);
   const xf: XfState = { ...dragState.xf0 };
   if (dragState.mode === "move") {
+    // dx/dy sit outside the rotation and scale now, so a drag is a plain
+    // canvas-space offset — no un-rotating or dividing by the scale.
     const wdx = world.x - dragState.startWorld.x, wdy = world.y - dragState.startWorld.y;
-    const rad = (-dragState.xf0.rot * Math.PI) / 180;
-    const cos = Math.cos(rad), sin = Math.sin(rad);
-    // dx/dy are applied BEFORE the scale (see applyXf), so a drag of one
-    // screen unit must be divided by that axis's scale to land where the
-    // pointer went.
-    const ldx = (wdx * cos - wdy * sin) / (dragState.xf0.sx || 1);
-    const ldy = (wdx * sin + wdy * cos) / (dragState.xf0.sy || 1);
-    xf.dx = Math.max(-4000, Math.min(4000, dragState.xf0.dx + ldx));
-    xf.dy = Math.max(-4000, Math.min(4000, dragState.xf0.dy + ldy));
+    xf.dx = Math.max(-4000, Math.min(4000, dragState.xf0.dx + wdx));
+    xf.dy = Math.max(-4000, Math.min(4000, dragState.xf0.dy + wdy));
   } else if (dragState.mode === "scale") {
     const { hw, hh, grab, grabOff, xf0 } = dragState;
     const r = rotatedOffset(world, dragState.pivotWorld, xf0.rot);
@@ -1891,11 +1878,22 @@ function onDragMove(e: PointerEvent) {
     const [gx, gy] = grab;
     const clamp = (v: number) => Math.max(0.3, Math.min(3, v));
     if (gx && gy) {
-      // Corner: the single scale that best maps the grabbed corner onto the
-      // pointer (least squares over both axes), which keeps the aspect exact
-      // instead of letting one axis win.
-      const k = (rx * gx * hw + ry * gy * hh) / (hw * hw + hh * hh);
-      xf.sx = xf.sy = clamp(k);
+      // Corner: scale both axes by the SAME FACTOR, so whatever aspect the
+      // box already has is preserved. Setting both to one absolute value
+      // instead would snap a side-stretched box back to its original shape
+      // the moment you touched a corner.
+      //
+      // The factor that best maps the grabbed corner onto the pointer, least
+      // squares over both axes (so neither one wins at a shallow angle):
+      const ax = gx * hw * xf0.sx, ay = gy * hh * xf0.sy;
+      const k = (rx * ax + ry * ay) / (ax * ax + ay * ay || 1);
+      // Clamp the FACTOR, not each axis, or hitting a limit on one side
+      // would quietly flatten the aspect the drag is meant to preserve.
+      const lo = Math.max(0.3 / xf0.sx, 0.3 / xf0.sy);
+      const hi = Math.min(3 / xf0.sx, 3 / xf0.sy);
+      const f = Math.max(lo, Math.min(hi, k));
+      xf.sx = xf0.sx * f;
+      xf.sy = xf0.sy * f;
     } else if (gx) {
       xf.sx = clamp(rx / (gx * hw));
     } else {

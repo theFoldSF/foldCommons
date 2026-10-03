@@ -79,12 +79,24 @@ export interface SigState {
 }
 
 // Per-element free transform (Photoshop-style): translate in canvas units,
-// per-axis scale, rotation in degrees. Pivots on the element's own untransformed
-// center. Identity when absent.
+// per-axis scale, rotation in degrees. Identity when absent.
+//
+// The order is: p -> d + c + R·S·(p - c). The translation is applied OUTSIDE
+// the rotation and scale, which is what makes the tool behave:
+//
+//   * dx/dy are a plain canvas-space offset. Under the old order
+//     (rotate·scale·translate) the offset was multiplied by the scale, so
+//     changing sx slid a moved element sideways by dx·Δsx — "resizing in one
+//     direction moves the box in the other".
+//   * the element's visible center is exactly c + d, so that is what rotation
+//     pivots about. Under the old order rotation pivoted about the
+//     untransformed center c, which for any element you had moved was a point
+//     off in space — "the rotation axis is not on the box itself".
 //
 // sx/sy are separate so a box can be stretched on one axis — corner handles
-// drive both together (aspect locked), side handles drive one. Docs saved
-// before this carried a single uniform `s`; sanitize() copies it into both.
+// scale both by the same factor (holding whatever aspect it has), side handles
+// drive one. Docs saved before this carried a single uniform `s`; sanitize()
+// copies it into both, and migrates v<3 offsets into the new order.
 export interface XfState {
   dx: number;
   dy: number;
@@ -221,7 +233,7 @@ export interface Doc {
   // Only meaningful for the "custom" template — the member's chosen canvas
   // dimensions. Absent everywhere else, where the template's own w/h rule.
   customSize?: { w: number; h: number };
-  v: 2;
+  v: 3; // bumped when the transform order changed; see XfState
   template: string;
   register: RegisterKey;
   ground: number; // index into GROUNDS
@@ -269,7 +281,7 @@ export function newDoc(templateId: string): Doc {
   }
   const engine = ENGINES[0];
   return finalizeComp({
-    v: 2,
+    v: 3,
     template: t.id,
     register: t.register,
     ground: 0,
@@ -540,6 +552,9 @@ function currentSeason(): string {
 // canon so hand-edited or stale share links can't escape the system.
 export function sanitize(doc: Doc): Doc {
   const t = templateById(doc.template) ?? TEMPLATES[0];
+  // Read before anything below overwrites it: v3 is the transform-order
+  // change (translation moved outside the rotation and scale).
+  const fromVersion = Number(doc.v) || 1;
   doc.template = t.id;
   if (!SEASONS.some((s) => s.key === doc.season)) doc.season = currentSeason();
   // v1 docs and hand-edited links: fill/clamp the composed-layout state.
@@ -687,12 +702,27 @@ export function sanitize(doc: Doc): Doc {
     const sx = Number.isFinite(Number(v.sx)) ? Number(v.sx) : uniform;
     const sy = Number.isFinite(Number(v.sy)) ? Number(v.sy) : uniform;
     if (![dx, dy, sx, sy, rot].some(Number.isFinite)) continue;
+    let ox = Number.isFinite(dx) ? dx : 0;
+    let oy = Number.isFinite(dy) ? dy : 0;
+    const csx = Math.max(0.3, Math.min(3, sx));
+    const csy = Math.max(0.3, Math.min(3, sy));
+    const crot = Number.isFinite(rot) ? Math.max(-180, Math.min(180, rot)) : 0;
+    if (fromVersion < 3 && (ox || oy)) {
+      // Pre-v3 the offset sat INSIDE the rotation and scale, so the element's
+      // center landed at c + R·S·d. The new order puts it at c + d — so the
+      // offset that reproduces the saved position exactly is R·S·d.
+      const rad = (crot * Math.PI) / 180;
+      const cos = Math.cos(rad), sin = Math.sin(rad);
+      const lx = ox * csx, ly = oy * csy;
+      ox = lx * cos - ly * sin;
+      oy = lx * sin + ly * cos;
+    }
     cleanXf[k] = {
-      dx: Number.isFinite(dx) ? Math.max(-t.w, Math.min(t.w, dx)) : 0,
-      dy: Number.isFinite(dy) ? Math.max(-t.h, Math.min(t.h, dy)) : 0,
-      sx: Math.max(0.3, Math.min(3, sx)),
-      sy: Math.max(0.3, Math.min(3, sy)),
-      rot: Number.isFinite(rot) ? Math.max(-180, Math.min(180, rot)) : 0,
+      dx: Math.max(-t.w, Math.min(t.w, ox)),
+      dy: Math.max(-t.h, Math.min(t.h, oy)),
+      sx: csx,
+      sy: csy,
+      rot: crot,
     };
   }
   doc.comp.xf = cleanXf;
@@ -700,7 +730,7 @@ export function sanitize(doc: Doc): Doc {
   doc.comp.front = Array.isArray(rawFront)
     ? [...new Set(rawFront.filter((k): k is XfKey => validXfKeys.includes(k as XfKey)))]
     : [];
-  doc.v = 2;
+  doc.v = 3;
   // register follows the ground — text stays readable by construction
   doc.register = docGround(doc).register;
   if (!REGISTERS[doc.register]) doc.register = t.register;

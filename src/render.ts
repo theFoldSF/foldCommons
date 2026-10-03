@@ -368,7 +368,7 @@ function xfWrap(doc: Doc, key: XfKey, cx: number, cy: number, inner: string): st
   const dx = xf?.dx ?? 0, dy = xf?.dy ?? 0, sx = xf?.sx ?? 1, sy = xf?.sy ?? 1, rot = xf?.rot ?? 0;
   const t =
     dx || dy || sx !== 1 || sy !== 1 || rot
-      ? ` transform="translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${rot.toFixed(2)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${dx.toFixed(2)} ${dy.toFixed(2)})"`
+      ? ` transform="translate(${dx.toFixed(2)} ${dy.toFixed(2)}) translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${rot.toFixed(2)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})"`
       : "";
   return `<g data-el="${key}"${t}>${inner}</g>`;
 }
@@ -615,19 +615,19 @@ function layoutWindow(
 function xfPt(t: XfState | undefined, cx: number, cy: number, x: number, y: number): { x: number; y: number } {
   if (!t) return { x, y };
   const rad = (t.rot * Math.PI) / 180;
-  const px = (x - cx + t.dx) * t.sx, py = (y - cy + t.dy) * t.sy;
+  const px = (x - cx) * t.sx, py = (y - cy) * t.sy;
   return {
-    x: cx + (px * Math.cos(rad) - py * Math.sin(rad)),
-    y: cy + (px * Math.sin(rad) + py * Math.cos(rad)),
+    x: cx + t.dx + (px * Math.cos(rad) - py * Math.sin(rad)),
+    y: cy + t.dy + (px * Math.sin(rad) + py * Math.cos(rad)),
   };
 }
 function xfPtInv(t: XfState | undefined, cx: number, cy: number, x: number, y: number): { x: number; y: number } {
   if (!t) return { x, y };
   const rad = (t.rot * Math.PI) / 180;
-  const ux = x - cx, uy = y - cy;
+  const ux = x - cx - t.dx, uy = y - cy - t.dy;
   const px = (ux * Math.cos(rad) + uy * Math.sin(rad)) / (t.sx || 1);
   const py = (-ux * Math.sin(rad) + uy * Math.cos(rad)) / (t.sy || 1);
-  return { x: cx + px - t.dx, y: cy + py - t.dy };
+  return { x: cx + px, y: cy + py };
 }
 
 // The light/dark pair every "pick a readable ink for this surface" decision
@@ -674,12 +674,12 @@ function windowContentLum(
 function xfAttr(t: XfState | undefined, cx: number, cy: number): string {
   if (xfIsIdentity(t)) return "";
   const u = t!;
-  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${u.rot.toFixed(2)}) scale(${u.sx.toFixed(4)} ${u.sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${u.dx.toFixed(2)} ${u.dy.toFixed(2)})`;
+  return `translate(${u.dx.toFixed(2)} ${u.dy.toFixed(2)}) translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${u.rot.toFixed(2)}) scale(${u.sx.toFixed(4)} ${u.sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`;
 }
 function xfInverseAttr(t: XfState | undefined, cx: number, cy: number): string {
   if (xfIsIdentity(t)) return "";
   const u = t!;
-  return `translate(${(-u.dx).toFixed(2)} ${(-u.dy).toFixed(2)}) translate(${cx.toFixed(2)} ${cy.toFixed(2)}) scale(${(1 / (u.sx || 1)).toFixed(6)} ${(1 / (u.sy || 1)).toFixed(6)}) rotate(${(-u.rot).toFixed(2)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`;
+  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) scale(${(1 / (u.sx || 1)).toFixed(6)} ${(1 / (u.sy || 1)).toFixed(6)}) rotate(${(-u.rot).toFixed(2)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${(-u.dx).toFixed(2)} ${(-u.dy).toFixed(2)})`;
 }
 
 // --- sampled-luminance ground truth ------------------------------------------
