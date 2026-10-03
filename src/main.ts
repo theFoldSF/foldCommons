@@ -99,6 +99,7 @@ import {
   type XfKey,
   type XfState,
   MAX_MOTIF_COLORS,
+  MIN_TEXT_BOX_W,
 } from "./state";
 
 // Friendly labels for ARRANGEMENTS, same order/length as state.ts's list.
@@ -1036,6 +1037,7 @@ function textBoxesControls(into: HTMLElement) {
         text: tb.text,
         frame: tb.frame,
         frameSeed: Math.floor(Math.random() * 100000),
+        w: tb.w,
       });
       const from = doc.comp.xf?.[textXfKey(tb.id)];
       const step = docTemplate(doc).w * 0.03;
@@ -1645,6 +1647,12 @@ function resetXf(key: XfKey) {
   const xf = { ...(doc.comp.xf ?? {}) };
   delete xf[key];
   doc.comp.xf = xf;
+  // For a text box, "reset" has to include the width a side handle set, or
+  // there would be no way back to a box that hugs its own words.
+  if (key.startsWith("text:")) {
+    const tb = doc.comp.texts.find((x) => textXfKey(x.id) === key);
+    if (tb) tb.w = undefined;
+  }
   renderCanvas();
 }
 
@@ -1678,6 +1686,10 @@ interface DragState {
   startWorld: { x: number; y: number };
   startAngle: number;
   live: XfState;
+  // Set when a side handle is dragged on a TEXT BOX. Those re-flow the words
+  // into a new box width instead of scaling, so this drag edits the doc and
+  // re-renders rather than just updating a transform.
+  widthDrag?: { id: string; extra: number; historyBefore: string };
 }
 
 let dragState: DragState | null = null;
@@ -1731,9 +1743,15 @@ function buildHandles(g: SVGGElement, key: XfKey) {
   // handles stretch a single axis. That split is the answer to both halves of
   // the same request — "aspect ratios would be nice" and "adjust the x and y
   // ratio rather than fixed resizing" — without a modifier key to remember.
+  // A text box's height is whatever its wrapped words need, so a top/bottom
+  // handle has nothing honest to do — it could only squash the type, which is
+  // the thing side handles are here to stop doing. Left/right re-wrap; corners
+  // still scale the whole box, type and all.
+  const isText = key.startsWith("text:");
   const grabs: Grab[] = [
     [-1, -1], [1, -1], [-1, 1], [1, 1],
-    [0, -1], [0, 1], [-1, 0], [1, 0],
+    ...(isText ? ([] as Grab[]) : ([[0, -1], [0, 1]] as Grab[])),
+    [-1, 0], [1, 0],
   ];
   const midX = bbox.x + bbox.width / 2, midY = bbox.y + bbox.height / 2;
   for (const grab of grabs) {
@@ -1816,6 +1834,24 @@ function buildHandles(g: SVGGElement, key: XfKey) {
   g.appendChild(chrome);
 }
 
+// Re-render at most once a frame while a width drag is in flight. The words
+// have to re-wrap to show the new width honestly, and that means a real
+// render rather than a transform on the existing one.
+let reflowQueued = false;
+function scheduleReflow() {
+  if (reflowQueued) return;
+  reflowQueued = true;
+  requestAnimationFrame(() => {
+    reflowQueued = false;
+    if (!dragState?.widthDrag) return;
+    renderCanvas();
+    // renderCanvas replaced the DOM — re-acquire the group this drag is
+    // steering, or the next move would measure a detached node.
+    const g = canvasWrap.querySelector(`[data-el="${dragState.key}"]`) as SVGGElement | null;
+    if (g) dragState.g = g;
+  });
+}
+
 // A world-space point expressed in an element's own rotated frame, relative
 // to its rendered center.
 function rotatedOffset(p: { x: number; y: number }, pivot: { x: number; y: number }, rot: number) {
@@ -1855,6 +1891,24 @@ function startDrag(e: PointerEvent, key: XfKey, g: SVGGElement, mode: DragState[
       ? { x: r0.x - grab[0] * hw * xf0.sx, y: r0.y - grab[1] * hh * xf0.sy }
       : { x: 0, y: 0 };
   dragState = { key, mode, xf0, cx, cy, hw, hh, grab, grabOff, g, pivotWorld, startWorld: world, startAngle, live: xf0 };
+
+  // A side handle on a text box re-wraps instead of stretching. Seed the
+  // member's width from what is on screen right now so the first move doesn't
+  // jump, and remember the gap between the plate's width and its bounding box
+  // (frame protrusion on a scalloped plate) so the edge tracks the pointer.
+  if (mode === "scale" && key.startsWith("text:") && grab[0] !== 0 && grab[1] === 0) {
+    const tb = doc.comp.texts.find((x) => textXfKey(x.id) === key);
+    if (tb) {
+      const historyBefore = historyCurrent;
+      if (tb.w === undefined) tb.w = 2 * hw;
+      dragState.widthDrag = { id: tb.id, extra: 2 * hw - tb.w, historyBefore };
+      // Select now rather than at pointerup: this drag re-renders the canvas
+      // on every move, and only a selected element keeps its handles across a
+      // re-render.
+      selected = key;
+      historySuppressed = true;
+    }
+  }
   (e.target as Element).setPointerCapture?.(e.pointerId);
   window.addEventListener("pointermove", onDragMove);
   window.addEventListener("pointerup", onDragEnd, { once: true });
@@ -1864,6 +1918,20 @@ function onDragMove(e: PointerEvent) {
   if (!dragState) return;
   const svg = dragState.g.ownerSVGElement as unknown as SVGSVGElement;
   const world = svgPoint(svg, e.clientX, e.clientY);
+  if (dragState.widthDrag) {
+    const { grab, grabOff, xf0, widthDrag } = dragState;
+    const tb = doc.comp.texts.find((x) => x.id === widthDrag.id);
+    if (!tb) return;
+    const r = rotatedOffset(world, dragState.pivotWorld, xf0.rot);
+    const rx = r.x - grabOff.x;
+    // Where the dragged edge wants to sit, as a half-extent of the bounding
+    // box; back out the frame protrusion to get the plate width itself.
+    const halfBox = rx / (grab[0] * (xf0.sx || 1));
+    const canvasW = docTemplate(doc).w;
+    tb.w = Math.max(MIN_TEXT_BOX_W, Math.min(canvasW, 2 * halfBox - widthDrag.extra));
+    scheduleReflow();
+    return;
+  }
   const xf: XfState = { ...dragState.xf0 };
   if (dragState.mode === "move") {
     // dx/dy sit outside the rotation and scale now, so a drag is a plain
@@ -1911,9 +1979,18 @@ function onDragMove(e: PointerEvent) {
 
 function onDragEnd() {
   if (!dragState) return;
-  const { key, live } = dragState;
+  const { key, live, widthDrag } = dragState;
   window.removeEventListener("pointermove", onDragMove);
   dragState = null;
+  if (widthDrag) {
+    // Re-render once more unsuppressed, from the pre-drag snapshot, so the
+    // whole drag lands as a single undo step rather than one per frame.
+    historySuppressed = false;
+    historyCurrent = widthDrag.historyBefore;
+    selected = key;
+    renderCanvas();
+    return;
+  }
   // clicking (or dragging) an element selects it — box + handles now persist
   // until something else is clicked, or Escape
   selected = key;

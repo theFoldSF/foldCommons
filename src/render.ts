@@ -949,24 +949,39 @@ function textBoxSvg(
   const size = c.detailSize;
   const fam = fontFamilyCss(bodyFace().name);
   const weight = bodyFace().weight;
-  const perLine = Math.max(8, Math.floor(proseDefault.w / (size * 0.5)));
+  const pad = size * 1.15;
+  // The width the words wrap to. A box the member has sized by dragging a side
+  // handle wraps to that width (minus its padding); one they haven't wraps to
+  // the layout default and then shrinks to its longest line, as it always did.
+  const wrapW = tb.w !== undefined ? Math.max(size, tb.w - pad * 2) : proseDefault.w;
   const lines: string[] = [];
   for (const para of text.split("\n")) {
     let line = "";
     for (const word of para.split(/\s+/).filter(Boolean)) {
       const cand = line ? `${line} ${word}` : word;
-      if (cand.length > perLine && line) {
+      // Measured, not a character count: the box edge is being dragged to a
+      // real width, so the break has to land against the real rendered width
+      // or the words spill past the plate they are supposed to fit inside.
+      if (measureTextWidth(cand, fam, weight, size) > wrapW && line) {
         lines.push(line);
         line = word;
       } else line = cand;
     }
     lines.push(line);
   }
-  const shown = lines.slice(0, 10);
-  const textW = Math.max(20, ...shown.map((l) => measureTextWidth(l, fam, weight, size)));
+  // Dragging a box narrow is easy now, and a narrow box runs into the line
+  // cap quickly — so show that words were dropped rather than losing them
+  // silently off the end of the plate.
+  const MAX_LINES = 14;
+  const shown = lines.slice(0, MAX_LINES);
+  if (lines.length > MAX_LINES) shown[MAX_LINES - 1] = shown[MAX_LINES - 1].replace(/\s*\S*$/, "…");
+  // A sized box keeps the width it was given; an unsized one hugs its text.
+  const textW =
+    tb.w !== undefined
+      ? wrapW
+      : Math.max(20, ...shown.map((l) => measureTextWidth(l, fam, weight, size)));
   const lh = size * 1.5;
   const textH = shown.length * lh;
-  const pad = size * 1.15;
   const plate = framedPlate(tb.frame, tb.frameSeed, textW + pad * 2, textH + pad * 2, ink, ground, 2, (cx, cy) => {
     const top = cy - textH / 2;
     return shown

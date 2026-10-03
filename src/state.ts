@@ -160,7 +160,16 @@ export interface TextBoxState {
   text: string;
   frame: string; // frame shape id — the PLATE_FRAMES set, same as the title's plate
   frameSeed: number;
+  // The member's own box width in canvas units, set by dragging a side handle.
+  // Absent means "shrink to fit the text at the default wrap width", which is
+  // how every box behaved before this existed. When set, the words re-wrap to
+  // it and the plate is drawn that wide — the box resizes, the type does not
+  // stretch, which is what a side handle should do to words.
+  w?: number;
 }
+
+// A text box narrower than this has nothing useful left to wrap.
+export const MIN_TEXT_BOX_W = 60;
 
 // Shuffle locks: when a key is true, shuffleComp() leaves that slot alone.
 export type LockKey =
@@ -676,6 +685,10 @@ export function sanitize(doc: Doc): Doc {
       text: typeof tb.text === "string" ? tb.text : "",
       frame: PLATE_FRAMES.some((f) => f.id === tb.frame) ? tb.frame : PLATE_FRAMES[0].id,
       frameSeed: Number.isFinite(tb.frameSeed) ? tb.frameSeed >>> 0 : 7,
+      // clamped to the canvas; absent (or junk) means shrink-to-fit as before
+      w: Number.isFinite(Number(tb.w))
+        ? Math.max(MIN_TEXT_BOX_W, Math.min(t.w, Number(tb.w)))
+        : undefined,
     }));
   // de-dupe ids (hand-edited links) so two boxes can't fight over one xf key
   const seenIds = new Set<string>();
