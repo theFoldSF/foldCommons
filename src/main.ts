@@ -14,6 +14,8 @@ import {
   FACES,
   COLOR,
   COLOR_KEYS,
+  TIER_LABEL,
+  tierRank,
   resolveColors,
   type RegisterKey,
   type ColorKey,
@@ -73,11 +75,12 @@ import {
   BG_FADE,
   LAYOUTS,
   LOCK_KEYS,
-  SIG_PARAMS,
+  SIG_UI_PARAMS,
   XF_KEYS,
   decodeDoc,
   defaultSigParams,
   docAccents,
+  accentTierAt,
   docColors,
   docGrounds,
   docGround,
@@ -95,6 +98,7 @@ import {
   type WordsLayout,
   type XfKey,
   type XfState,
+  MAX_MOTIF_COLORS,
 } from "./state";
 
 // Friendly labels for ARRANGEMENTS, same order/length as state.ts's list.
@@ -171,13 +175,20 @@ function accentChips(
     c.onclick = () => onPick(-1);
     wrap.appendChild(c);
   }
-  accents.forEach((hex, i) => {
-    const c = h(
-      `<button class="chip ${current === i ? "active" : ""}" style="background:${hex}" title="${hex}"></button>`
-    );
-    c.onclick = () => onPick(i);
-    wrap.appendChild(c);
-  });
+  // True accents lead; base colors (orange, indigo) follow, drawn smaller —
+  // both still pickable, but the row reads as a hierarchy rather than a flat
+  // palette. `i` stays the real docAccents index the doc stores.
+  accents
+    .map((hex, i) => ({ hex, i, tier: accentTierAt(doc, i) }))
+    .sort((a, b) => tierRank(a.tier) - tierRank(b.tier))
+    .forEach(({ hex, i, tier }) => {
+      const c = h(
+        `<button class="chip tier-${tier} ${current === i ? "active" : ""}"
+          style="background:${hex}" title="${hex} — ${TIER_LABEL[tier]}"></button>`
+      );
+      c.onclick = () => onPick(i);
+      wrap.appendChild(c);
+    });
   return wrap;
 }
 
@@ -188,7 +199,17 @@ function buildLeft() {
   // itself the scrolling element.
   const scrollY = leftPanel.scrollTop;
   leftPanel.innerHTML = "";
-  leftPanel.appendChild(h(`<h3 class="panel-title">Template</h3>`));
+  // The left panel's groups collapse like the right panel's always have. On a
+  // half-screen window the eight template cards pushed Ground and Palette far
+  // enough down that they read as missing rather than scrolled past.
+  section(leftPanel, "left.template", "Template", true, buildTemplateCards);
+  section(leftPanel, "left.ground", "Ground", true, buildGroundChips, "groundRegister");
+  section(leftPanel, "left.palette", "Palette", true, buildPaletteRow);
+  if (!docTemplate(doc).composed) section(leftPanel, "left.season", "Season", true, buildSeasonChips);
+  leftPanel.scrollTop = scrollY;
+}
+
+function buildTemplateCards(into: HTMLElement) {
   for (const t of TEMPLATES) {
     const card = h(
       `<button class="tpl-card ${t.id === doc.template ? "active" : ""}">
@@ -210,49 +231,50 @@ function buildLeft() {
       }
       buildAll();
     };
-    leftPanel.appendChild(card);
+    into.appendChild(card);
   }
+  if (doc.template === "custom") buildCustomSizeRow(into);
+}
 
-  if (doc.template === "custom") buildCustomSizeRow(leftPanel);
-
-  const groundHead = h(`<div class="panel-head-row"><h3 class="panel-title">Ground</h3></div>`);
-  groundHead.appendChild(lockToggle("groundRegister"));
-  leftPanel.appendChild(groundHead);
-  const gchips = h(`<div class="chips"></div>`);
-  docGrounds(doc).forEach((g, i) => {
-    const c = h(
-      `<button class="chip ${doc.ground === i ? "active" : ""}" style="background:${g.hex}" title="${g.label}"></button>`
-    );
-    c.onclick = () => {
-      doc.ground = i;
-      doc.register = g.register;
-      buildAll();
-    };
-    gchips.appendChild(c);
-  });
-  leftPanel.appendChild(gchips);
-  buildPaletteRow(leftPanel);
-
-  if (!docTemplate(doc).composed) {
-    leftPanel.appendChild(h(`<h3 class="panel-title">Season</h3>`));
-    const chips = h(`<div class="chips"></div>`);
-    for (const s of SEASONS) {
+function buildGroundChips(into: HTMLElement) {
+  const gchips = h(`<div class="chips ground-chips"></div>`);
+  // Display order only — the base colors (orange, indigo) lead and are drawn
+  // larger so the hierarchy is visible at a glance. `i` stays each ground's
+  // real index into docGrounds(), which doc.ground stores, so reordering the
+  // picker never repaints a saved piece.
+  docGrounds(doc)
+    .map((g, i) => ({ g, i }))
+    .sort((a, b) => tierRank(a.g.tier) - tierRank(b.g.tier))
+    .forEach(({ g, i }) => {
       const c = h(
-        `<button class="chip ${doc.season === s.key ? "active" : ""}" style="background:${s.accent}" title="${s.label}"></button>`
+        `<button class="chip tier-${g.tier} ${doc.ground === i ? "active" : ""}"
+          style="background:${g.hex}" title="${g.label} — ${TIER_LABEL[g.tier]}"></button>`
       );
       c.onclick = () => {
-        doc.season = s.key;
-        buildLeft();
-        renderCanvas();
+        doc.ground = i;
+        doc.register = g.register;
+        buildAll();
       };
-      chips.appendChild(c);
-    }
-    leftPanel.appendChild(chips);
-    leftPanel.appendChild(
-      h(`<div class="note">The Line stays constant; its color marks the season.</div>`)
+      gchips.appendChild(c);
+    });
+  into.appendChild(gchips);
+}
+
+function buildSeasonChips(into: HTMLElement) {
+  const chips = h(`<div class="chips"></div>`);
+  for (const s of SEASONS) {
+    const c = h(
+      `<button class="chip ${doc.season === s.key ? "active" : ""}" style="background:${s.accent}" title="${s.label}"></button>`
     );
+    c.onclick = () => {
+      doc.season = s.key;
+      buildLeft();
+      renderCanvas();
+    };
+    chips.appendChild(c);
   }
-  leftPanel.scrollTop = scrollY;
+  into.appendChild(chips);
+  into.appendChild(h(`<div class="note">The Line stays constant; its color marks the season.</div>`));
 }
 
 // --- shuffle locks -----------------------------------------------------------
@@ -351,10 +373,8 @@ let paletteCache: TeamPalette[] | null = null;
 function buildPaletteRow(into: HTMLElement) {
   if (!paletteApiBase()) return;
 
-  const head = h(`<div class="panel-head-row" style="margin-top:22px">
-    <h3 class="panel-title">Palette</h3></div>`);
-  into.appendChild(head);
-
+  // No header of its own — buildLeft wraps this in a collapsible "Palette"
+  // section, and the hidden #palette page supplies its own title.
   const openBtn = h(`<button class="act ghost" style="width:100%">🎨 Palette tuner</button>`);
   openBtn.onclick = () => buildPaletteView();
   into.appendChild(openBtn);
@@ -802,7 +822,7 @@ function bgTextureControls(into: HTMLElement) {
 function sigControls(into: HTMLElement) {
   if (!docTemplate(doc).composed) return;
   into.appendChild(
-    h(`<div class="note">The name held together — a membrane, a web, or ridge lines.
+    h(`<div class="note">The name held together as a membrane.
       Every piece carries one; reroll until it feels right.</div>`)
   );
   const tog = h(
@@ -825,7 +845,7 @@ function sigControls(into: HTMLElement) {
   };
   into.appendChild(tog);
   if (!doc.comp.sigOn) return;
-  for (const p of SIG_PARAMS) {
+  for (const p of SIG_UI_PARAMS) {
     const f = h(`<div class="field"><label>${p.label}</label></div>`);
     const r = h(
       `<input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${doc.comp.sig.params[p.key]}">`
@@ -871,6 +891,7 @@ function composedWordControls(into: HTMLElement) {
     { key: "ticket", label: "Ticket" },
     { key: "scallop", label: "Scallop" },
     { key: "line", label: "Line" },
+    { key: "plain", label: "Plain" },
   ];
   const cf = lockedField("Chip style", "chips");
   const cseg = h(`<div class="seg"></div>`);
@@ -1003,6 +1024,34 @@ function textBoxesControls(into: HTMLElement) {
       tb.frameSeed = Math.floor(Math.random() * 100000);
       renderCanvas();
     };
+    // Duplicating carries the words, the frame and the member's own transform
+    // across, then nudges the copy clear of the original — otherwise the new
+    // box lands exactly behind the old one and looks like nothing happened.
+    const dupe = h(`<button class="mini">⧉ Duplicate</button>`);
+    dupe.onclick = () => {
+      const id = newTextBoxId();
+      const at = doc.comp.texts.findIndex((x) => x.id === tb.id);
+      doc.comp.texts.splice(at + 1, 0, {
+        id,
+        text: tb.text,
+        frame: tb.frame,
+        frameSeed: Math.floor(Math.random() * 100000),
+      });
+      const from = doc.comp.xf?.[textXfKey(tb.id)];
+      const step = docTemplate(doc).w * 0.03;
+      doc.comp.xf = {
+        ...(doc.comp.xf ?? {}),
+        [textXfKey(id)]: {
+          dx: (from?.dx ?? 0) + step,
+          dy: (from?.dy ?? 0) + step,
+          sx: from?.sx ?? 1,
+          sy: from?.sy ?? 1,
+          rot: from?.rot ?? 0,
+        },
+      };
+      buildRight();
+      renderCanvas();
+    };
     const del = h(`<button class="mini">✕ Delete</button>`);
     del.onclick = () => {
       doc.comp.texts = doc.comp.texts.filter((x) => x.id !== tb.id);
@@ -1013,7 +1062,7 @@ function textBoxesControls(into: HTMLElement) {
       buildRight();
       renderCanvas();
     };
-    rowBtns.append(reroll, del);
+    rowBtns.append(reroll, dupe, del);
     card.appendChild(rowBtns);
     into.appendChild(card);
   }
@@ -1031,12 +1080,44 @@ function textBoxesControls(into: HTMLElement) {
   into.appendChild(add);
 }
 
+// Stacking, as a visible control rather than only a canvas gesture — in the
+// overlay layouts the motif isn't drawn until it's raised, so there is nothing
+// on the canvas to select and press ] on.
+function buildMotifLayerControl(into: HTMLElement) {
+  const layerField = h(`<div class="field"><label>Layer</label></div>`);
+  const layerSeg = h(`<div class="seg"></div>`);
+  for (const [label, front] of [["Behind", false], ["In front", true]] as [string, boolean][]) {
+    const b = h(`<button class="${isFront("motif") === front ? "active" : ""}">${label}</button>`);
+    b.onclick = () => {
+      setFront("motif", front);
+      buildRight();
+    };
+    layerSeg.appendChild(b);
+  }
+  layerField.appendChild(layerSeg);
+  into.appendChild(layerField);
+}
+
 function motifControls(into: HTMLElement) {
   const t = docTemplate(doc);
+  // Hero and Color panel carry no motif of their own, but one can now be laid
+  // OVER them (see composedSvg) — so they get the panel too, led by the Layer
+  // control that is the only thing that puts a motif on those layouts at all.
+  const overlayOnly = doc.comp.layout === "panel" || doc.comp.layout === "hero";
   const composedMotif =
     t.composed &&
-    (doc.comp.layout === "motif" || doc.comp.layout === "backdrop" || doc.comp.layout === "collage");
+    (doc.comp.layout === "motif" ||
+      doc.comp.layout === "backdrop" ||
+      doc.comp.layout === "collage" ||
+      overlayOnly);
   if ((!t.motifSlot && !composedMotif) || !doc.motif) return;
+  if (overlayOnly) {
+    into.appendChild(
+      h(`<div class="note">This layout has no motif of its own — set the layer to
+        <b>In front</b> to lay one over it.</div>`)
+    );
+  }
+  if (overlayOnly) buildMotifLayerControl(into);
   const sel = h(
     `<div class="field"><select>${ENGINES.map(
       (e) => `<option value="${e.id}" ${doc.motif!.engine === e.id ? "selected" : ""}>${e.label}</option>`
@@ -1075,16 +1156,48 @@ function motifControls(into: HTMLElement) {
   row.appendChild(reroll);
   into.appendChild(row);
 
-  const colorsField = h(`<div class="field"><label>Motif colors</label></div>`);
-  doc.motif.accents.forEach((a, slot) => {
-    colorsField.appendChild(
+  // Motif colors: one chip row per color the engine is handed. The engines
+  // have always taken an arbitrary-length list — it was only this panel that
+  // fixed it at the two slots a new doc starts with, which is why the quilt
+  // and the node graph could never be given a third color.
+  if (!overlayOnly) buildMotifLayerControl(into);
+
+  const colorsField = h(`<div class="field">
+    <div class="field-head"><label>Motif colors</label><div class="row slot-ctl"></div></div>
+  </div>`);
+  const slotCtl = colorsField.querySelector(".slot-ctl") as HTMLElement;
+  const accents = doc.motif.accents;
+  accents.forEach((a, slot) => {
+    const row = h(`<div class="slot-row"></div>`);
+    row.appendChild(
       accentChips(a, {}, (idx) => {
         doc.motif!.accents[slot] = idx;
         buildRight();
         renderCanvas();
       })
     );
+    colorsField.appendChild(row);
   });
+
+  const addSlot = h(`<button class="mini" title="Add a color">+</button>`) as HTMLButtonElement;
+  addSlot.disabled = accents.length >= MAX_MOTIF_COLORS;
+  addSlot.onclick = () => {
+    // Start a new slot on an accent none of the others is using, so adding one
+    // visibly does something instead of doubling a color already there.
+    const pool = docAccents(doc).map((_, i) => i);
+    const next = pool.find((i) => !accents.includes(i)) ?? (accents[accents.length - 1] + 1);
+    doc.motif!.accents = [...accents, next];
+    buildRight();
+    renderCanvas();
+  };
+  const dropSlot = h(`<button class="mini" title="Remove the last color">−</button>`) as HTMLButtonElement;
+  dropSlot.disabled = accents.length <= 1;
+  dropSlot.onclick = () => {
+    doc.motif!.accents = accents.slice(0, -1);
+    buildRight();
+    renderCanvas();
+  };
+  slotCtl.append(dropSlot, addSlot);
   into.appendChild(colorsField);
 }
 
@@ -1504,11 +1617,28 @@ function svgPoint(svg: SVGSVGElement, clientX: number, clientY: number): { x: nu
 
 function getXf(key: XfKey): XfState {
   const x = doc.comp.xf?.[key];
-  return { dx: x?.dx ?? 0, dy: x?.dy ?? 0, s: x?.s ?? 1, rot: x?.rot ?? 0 };
+  return { dx: x?.dx ?? 0, dy: x?.dy ?? 0, sx: x?.sx ?? 1, sy: x?.sy ?? 1, rot: x?.rot ?? 0 };
 }
 
 function setXf(key: XfKey, xf: XfState) {
   doc.comp.xf = { ...(doc.comp.xf ?? {}), [key]: xf };
+}
+
+// "Bring to front" / "send to back" for the art layers. Only the motif and
+// the photo stack against each other — the words always sit above both — so
+// those are the only keys this is offered on.
+const STACKABLE: XfKey[] = ["motif", "photo"];
+
+function isFront(key: XfKey): boolean {
+  return (doc.comp.front ?? []).includes(key);
+}
+
+function setFront(key: XfKey, front: boolean) {
+  const cur = (doc.comp.front ?? []).filter((k) => k !== key);
+  doc.comp.front = front ? [...cur, key] : cur;
+  // renderCanvas re-runs attachXfInteractivity, which rebuilds the chrome for
+  // the still-selected element — so the arrow glyph flips with the change.
+  renderCanvas();
 }
 
 function resetXf(key: XfKey) {
@@ -1523,14 +1653,19 @@ function resetXf(key: XfKey) {
 function applyXf(p: { x: number; y: number }, cx: number, cy: number, xf: XfState) {
   const rad = (xf.rot * Math.PI) / 180;
   const cos = Math.cos(rad), sin = Math.sin(rad);
-  const lx = (p.x - cx + xf.dx) * xf.s;
-  const ly = (p.y - cy + xf.dy) * xf.s;
+  const lx = (p.x - cx + xf.dx) * xf.sx;
+  const ly = (p.y - cy + xf.dy) * xf.sy;
   return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos };
 }
 
 function xfTransformAttr(cx: number, cy: number, xf: XfState): string {
-  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${xf.rot.toFixed(2)}) scale(${xf.s.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${xf.dx.toFixed(2)} ${xf.dy.toFixed(2)})`;
+  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${xf.rot.toFixed(2)}) scale(${xf.sx.toFixed(4)} ${xf.sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${xf.dx.toFixed(2)} ${xf.dy.toFixed(2)})`;
 }
+
+// Which handle is being dragged, in normalized element space: -1/0/1 on each
+// axis, so [1,1] is the bottom-right corner and [1,0] the right edge. Corners
+// move both axes together (aspect locked); edges move one.
+type Grab = [number, number];
 
 interface DragState {
   key: XfKey;
@@ -1538,25 +1673,54 @@ interface DragState {
   xf0: XfState;
   cx: number;
   cy: number;
+  // Half-extents of the element's own untransformed box. Every scale is
+  // computed against these, so the result is an absolute scale factor rather
+  // than a ratio accumulated from wherever the pointer happened to land.
+  hw: number;
+  hh: number;
+  grab: Grab;
+  // Pointer offset from the true handle position at pointerdown, in the
+  // element's rotated frame — subtracted throughout so grabbing a handle
+  // slightly off-center doesn't snap the element on the first move.
+  grabOff: { x: number; y: number };
   g: SVGGElement;
   pivotWorld: { x: number; y: number };
   startWorld: { x: number; y: number };
-  startCornerDist: number;
   startAngle: number;
   live: XfState;
 }
 
 let dragState: DragState | null = null;
 
+// The element's own bounding box, measured with the selection chrome hidden.
+//
+// This matters more than it looks: the chrome is a CHILD of the same <g>, and
+// its rotate handle sits above the top edge while the ⟲ glyph sits beyond the
+// right one. Measuring with it attached returns a box that is taller and wider
+// than the element, whose center sits up and to the right of the true center —
+// so the scale pivot, the rotation pivot and the handle geometry all drift,
+// which is what made resizing feel like it ran away from the pointer.
+function cleanBBox(g: SVGGElement): DOMRect | null {
+  const chrome = g.querySelector(".xf-chrome") as SVGGElement | null;
+  const prev = chrome?.getAttribute("display") ?? null;
+  chrome?.setAttribute("display", "none");
+  try {
+    const b = g.getBBox();
+    return b.width && b.height ? b : null;
+  } catch {
+    return null;
+  } finally {
+    if (chrome) {
+      if (prev === null) chrome.removeAttribute("display");
+      else chrome.setAttribute("display", prev);
+    }
+  }
+}
+
 function buildHandles(g: SVGGElement, key: XfKey) {
   g.querySelector(".xf-chrome")?.remove();
-  let bbox: DOMRect;
-  try {
-    bbox = g.getBBox();
-  } catch {
-    return;
-  }
-  if (!bbox.width || !bbox.height) return;
+  const bbox = cleanBBox(g);
+  if (!bbox) return;
   const svg = g.ownerSVGElement!;
   const H = Number(svg.getAttribute("height")) || bbox.height;
   const hs = Math.max(7, H * 0.012);
@@ -1573,22 +1737,36 @@ function buildHandles(g: SVGGElement, key: XfKey) {
   rect.addEventListener("dblclick", () => resetXf(key));
   chrome.appendChild(rect);
 
-  const corners: [number, number][] = [
-    [bbox.x, bbox.y],
-    [bbox.x + bbox.width, bbox.y],
-    [bbox.x, bbox.y + bbox.height],
-    [bbox.x + bbox.width, bbox.y + bbox.height],
+  // Corners scale both axes together so the aspect ratio holds; the four edge
+  // handles stretch a single axis. That split is the answer to both halves of
+  // the same request — "aspect ratios would be nice" and "adjust the x and y
+  // ratio rather than fixed resizing" — without a modifier key to remember.
+  const grabs: Grab[] = [
+    [-1, -1], [1, -1], [-1, 1], [1, 1],
+    [0, -1], [0, 1], [-1, 0], [1, 0],
   ];
-  for (const [hx, hy] of corners) {
+  const midX = bbox.x + bbox.width / 2, midY = bbox.y + bbox.height / 2;
+  for (const grab of grabs) {
+    const [gx, gy] = grab;
+    const hx = midX + gx * (bbox.width / 2);
+    const hy = midY + gy * (bbox.height / 2);
+    const edge = gx === 0 || gy === 0;
+    // Edge handles read as short bars along the edge they move, so which axis
+    // they stretch is legible before you drag one.
+    const wSide = edge && gx === 0 ? hs * 2.2 : hs;
+    const hSide = edge && gy === 0 ? hs * 2.2 : hs;
     const handle = document.createElementNS(svgNS, "rect");
-    handle.setAttribute("x", String(hx - hs / 2));
-    handle.setAttribute("y", String(hy - hs / 2));
-    handle.setAttribute("width", String(hs));
-    handle.setAttribute("height", String(hs));
-    handle.setAttribute("class", "xf-handle");
+    handle.setAttribute("x", String(hx - wSide / 2));
+    handle.setAttribute("y", String(hy - hSide / 2));
+    handle.setAttribute("width", String(wSide));
+    handle.setAttribute("height", String(hSide));
+    handle.setAttribute(
+      "class",
+      edge ? `xf-handle xf-edge xf-edge-${gx === 0 ? "y" : "x"}` : "xf-handle"
+    );
     handle.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
-      startDrag(e, key, g, "scale");
+      startDrag(e, key, g, "scale", grab);
     });
     chrome.appendChild(handle);
   }
@@ -1626,10 +1804,38 @@ function buildHandles(g: SVGGElement, key: XfKey) {
   });
   chrome.appendChild(reset);
 
+  if (STACKABLE.includes(key)) {
+    const front = isFront(key);
+    const lift = document.createElementNS(svgNS, "text");
+    lift.setAttribute("x", String(bbox.x + bbox.width + hs * 0.5));
+    lift.setAttribute("y", String(bbox.y + hs * 1.7));
+    lift.setAttribute("font-size", String(hs * 1.7));
+    lift.setAttribute("class", "xf-reset xf-lift");
+    lift.textContent = front ? "⤓" : "⤒";
+    const svgTitle = document.createElementNS(svgNS, "title");
+    svgTitle.textContent = front ? "Send to back ( [ )" : "Bring to front ( ] )";
+    lift.appendChild(svgTitle);
+    lift.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      setFront(key, !front);
+    });
+    chrome.appendChild(lift);
+  }
+
   g.appendChild(chrome);
 }
 
-function startDrag(e: PointerEvent, key: XfKey, g: SVGGElement, mode: DragState["mode"]) {
+// A world-space point expressed in an element's own rotated frame, relative
+// to its rendered center.
+function rotatedOffset(p: { x: number; y: number }, pivot: { x: number; y: number }, rot: number) {
+  const rad = (-rot * Math.PI) / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const ux = p.x - pivot.x, uy = p.y - pivot.y;
+  return { x: ux * cos - uy * sin, y: ux * sin + uy * cos };
+}
+
+function startDrag(e: PointerEvent, key: XfKey, g: SVGGElement, mode: DragState["mode"], grab: Grab = [1, 1]) {
   e.preventDefault();
   e.stopPropagation();
   // preventDefault above also cancels the browser's normal implicit blur of
@@ -1640,18 +1846,23 @@ function startDrag(e: PointerEvent, key: XfKey, g: SVGGElement, mode: DragState[
   // element. Blur explicitly so intent visibly moves to the canvas.
   if (isTypingTarget(document.activeElement)) (document.activeElement as HTMLElement).blur();
   const svg = g.ownerSVGElement as unknown as SVGSVGElement;
-  const bbox = g.getBBox();
+  const bbox = cleanBBox(g);
+  if (!bbox) return;
   const cx = bbox.x + bbox.width / 2, cy = bbox.y + bbox.height / 2;
+  const hw = bbox.width / 2, hh = bbox.height / 2;
   const xf0 = getXf(key);
   const world = svgPoint(svg, e.clientX, e.clientY);
   const pivotWorld = applyXf({ x: cx, y: cy }, cx, cy, xf0);
-  let startCornerDist = 1, startAngle = 0;
-  if (mode === "scale") {
-    const corner = applyXf({ x: bbox.x + bbox.width, y: bbox.y + bbox.height }, cx, cy, xf0);
-    startCornerDist = Math.hypot(corner.x - pivotWorld.x, corner.y - pivotWorld.y) || 1;
-  }
-  if (mode === "rotate") startAngle = Math.atan2(world.y - pivotWorld.y, world.x - pivotWorld.x);
-  dragState = { key, mode, xf0, cx, cy, g, pivotWorld, startWorld: world, startCornerDist, startAngle, live: xf0 };
+  const startAngle =
+    mode === "rotate" ? Math.atan2(world.y - pivotWorld.y, world.x - pivotWorld.x) : 0;
+  // Where the pointer landed vs. where the handle actually is, in the
+  // element's own rotated frame.
+  const r0 = rotatedOffset(world, pivotWorld, xf0.rot);
+  const grabOff =
+    mode === "scale"
+      ? { x: r0.x - grab[0] * hw * xf0.sx, y: r0.y - grab[1] * hh * xf0.sy }
+      : { x: 0, y: 0 };
+  dragState = { key, mode, xf0, cx, cy, hw, hh, grab, grabOff, g, pivotWorld, startWorld: world, startAngle, live: xf0 };
   (e.target as Element).setPointerCapture?.(e.pointerId);
   window.addEventListener("pointermove", onDragMove);
   window.addEventListener("pointerup", onDragEnd, { once: true });
@@ -1666,15 +1877,30 @@ function onDragMove(e: PointerEvent) {
     const wdx = world.x - dragState.startWorld.x, wdy = world.y - dragState.startWorld.y;
     const rad = (-dragState.xf0.rot * Math.PI) / 180;
     const cos = Math.cos(rad), sin = Math.sin(rad);
-    const invS = 1 / (dragState.xf0.s || 1);
-    const ldx = (wdx * cos - wdy * sin) * invS;
-    const ldy = (wdx * sin + wdy * cos) * invS;
+    // dx/dy are applied BEFORE the scale (see applyXf), so a drag of one
+    // screen unit must be divided by that axis's scale to land where the
+    // pointer went.
+    const ldx = (wdx * cos - wdy * sin) / (dragState.xf0.sx || 1);
+    const ldy = (wdx * sin + wdy * cos) / (dragState.xf0.sy || 1);
     xf.dx = Math.max(-4000, Math.min(4000, dragState.xf0.dx + ldx));
     xf.dy = Math.max(-4000, Math.min(4000, dragState.xf0.dy + ldy));
   } else if (dragState.mode === "scale") {
-    const dist = Math.hypot(world.x - dragState.pivotWorld.x, world.y - dragState.pivotWorld.y);
-    const ratio = dist / dragState.startCornerDist;
-    xf.s = Math.max(0.3, Math.min(3, dragState.xf0.s * ratio));
+    const { hw, hh, grab, grabOff, xf0 } = dragState;
+    const r = rotatedOffset(world, dragState.pivotWorld, xf0.rot);
+    const rx = r.x - grabOff.x, ry = r.y - grabOff.y;
+    const [gx, gy] = grab;
+    const clamp = (v: number) => Math.max(0.3, Math.min(3, v));
+    if (gx && gy) {
+      // Corner: the single scale that best maps the grabbed corner onto the
+      // pointer (least squares over both axes), which keeps the aspect exact
+      // instead of letting one axis win.
+      const k = (rx * gx * hw + ry * gy * hh) / (hw * hw + hh * hh);
+      xf.sx = xf.sy = clamp(k);
+    } else if (gx) {
+      xf.sx = clamp(rx / (gx * hw));
+    } else {
+      xf.sy = clamp(ry / (gy * hh));
+    }
   } else {
     const ang = Math.atan2(world.y - dragState.pivotWorld.y, world.x - dragState.pivotWorld.x);
     const delta = ((ang - dragState.startAngle) * 180) / Math.PI;
@@ -1754,6 +1980,13 @@ window.addEventListener("keydown", (e) => {
   if ((e.key === "Delete" || e.key === "Backspace") && !typing && selected) {
     e.preventDefault();
     deleteSelected();
+    return;
+  }
+  // ] / [ — the design-tool convention for raising and lowering the selected
+  // layer. Only the stackable art layers respond.
+  if ((e.key === "]" || e.key === "[") && !typing && selected && STACKABLE.includes(selected)) {
+    e.preventDefault();
+    setFront(selected, e.key === "]");
     return;
   }
   // Cmd/Ctrl+Z / Shift+Cmd/Ctrl+Z — suppressed while typing so the browser's
@@ -1848,6 +2081,41 @@ function redo() {
   historyUndo.push(historyCurrent);
   if (historyUndo.length > HISTORY_CAP) historyUndo.shift();
   applyHistorySnapshot(historyRedo.pop()!);
+}
+
+// Panel visibility. Either side can be hidden outright so the artifact gets
+// the window on a half-screen layout; the choice sticks per browser.
+const PANES_KEY = "foldCommons.panes.v1";
+const makeView = document.querySelector("#makeView") as HTMLElement;
+
+function paneHidden(side: "left" | "right"): boolean {
+  try {
+    return JSON.parse(localStorage.getItem(PANES_KEY) ?? "{}")[side] === true;
+  } catch {
+    return false;
+  }
+}
+
+function setPaneHidden(side: "left" | "right", hidden: boolean) {
+  makeView.classList.toggle(`no-${side}`, hidden);
+  const btn = document.querySelector(side === "left" ? "#toggleLeft" : "#toggleRight") as HTMLButtonElement;
+  btn.classList.toggle("off", hidden);
+  btn.title = hidden
+    ? `Show the ${side === "left" ? "template" : "controls"} panel`
+    : `Hide the ${side === "left" ? "template" : "controls"} panel`;
+  try {
+    const state = JSON.parse(localStorage.getItem(PANES_KEY) ?? "{}");
+    state[side] = hidden;
+    localStorage.setItem(PANES_KEY, JSON.stringify(state));
+  } catch {
+    /* private mode — the toggle still works, it just won't be remembered */
+  }
+}
+
+for (const side of ["left", "right"] as const) {
+  const btn = document.querySelector(side === "left" ? "#toggleLeft" : "#toggleRight") as HTMLButtonElement;
+  btn.onclick = () => setPaneHidden(side, !makeView.classList.contains(`no-${side}`));
+  setPaneHidden(side, paneHidden(side));
 }
 
 (document.querySelector("#undoBtn") as HTMLButtonElement).onclick = undo;
@@ -1959,6 +2227,28 @@ function section(
     body.style.maxHeight = next ? inner.scrollHeight + "px" : "0px";
   };
 }
+
+// An open section's max-height is a pixel value measured when it was built.
+// Narrow the window and its contents reflow taller than that cap, silently
+// clipping the bottom of the section — which the narrower panels at small
+// widths hit constantly. Re-measure every open section after a resize.
+function resyncSectionHeights() {
+  for (const wrap of document.querySelectorAll(".panel-section.open")) {
+    const body = wrap.querySelector(".panel-section-body") as HTMLElement | null;
+    const inner = wrap.querySelector(".panel-section-inner") as HTMLElement | null;
+    if (!body || !inner) continue;
+    body.style.transition = "none";
+    body.style.maxHeight = inner.scrollHeight + "px";
+    void body.offsetHeight;
+    body.style.transition = "";
+  }
+}
+
+let resyncTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(resyncTimer);
+  resyncTimer = window.setTimeout(resyncSectionHeights, 120);
+});
 
 function buildRight() {
   // rightPanel is itself the scrolling element — clearing its innerHTML
@@ -2415,7 +2705,7 @@ function buildTuneView() {
     const randomize = h(`<button type="button" class="act ghost" style="margin-bottom:14px">🎲 Randomize</button>`);
     randomize.onclick = () => {
       seed = Math.floor(Math.random() * 100000);
-      for (const p of SIG_PARAMS) {
+      for (const p of SIG_UI_PARAMS) {
         const v = p.min + Math.random() * (p.max - p.min);
         params[p.key] = Math.min(p.max, Math.max(p.min, Math.round(v / p.step) * p.step));
       }
@@ -2423,7 +2713,7 @@ function buildTuneView() {
       renderControls();
     };
     controls.appendChild(randomize);
-    for (const p of SIG_PARAMS) {
+    for (const p of SIG_UI_PARAMS) {
       const f = h(`<div class="field"><label>${p.label}</label></div>`);
       const r = h(
         `<input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${params[p.key]}">`

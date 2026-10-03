@@ -13,6 +13,9 @@ import {
   buildRegisters,
   resolveColors,
   COLOR_KEYS,
+  COLOR_TIER,
+  ACCENT_KEYS,
+  type ColorTier,
   type ColorMap,
   type Ground,
   type Palette,
@@ -76,18 +79,37 @@ export interface SigState {
 }
 
 // Per-element free transform (Photoshop-style): translate in canvas units,
-// uniform scale, rotation in degrees. Pivots on the element's own untransformed
+// per-axis scale, rotation in degrees. Pivots on the element's own untransformed
 // center. Identity when absent.
+//
+// sx/sy are separate so a box can be stretched on one axis — corner handles
+// drive both together (aspect locked), side handles drive one. Docs saved
+// before this carried a single uniform `s`; sanitize() copies it into both.
 export interface XfState {
   dx: number;
   dy: number;
-  s: number;
+  sx: number;
+  sy: number;
   rot: number;
 }
+
+// Anything that needs ONE scalar from a two-axis scale — a disc radius, a
+// stroke width — takes the geometric mean, which is what a uniform scale of
+// the same area would have been.
+export const xfMeanScale = (t?: { sx?: number; sy?: number } | null): number =>
+  Math.sqrt(Math.max(0.0001, (t?.sx ?? 1) * (t?.sy ?? 1)));
+
+/** True when this transform does nothing — used to skip emitting a transform. */
+export const xfIsIdentity = (t?: Partial<XfState> | null): boolean =>
+  !t || (!t.dx && !t.dy && (t.sx ?? 1) === 1 && (t.sy ?? 1) === 1 && !t.rot);
 
 // The composed layout's fixed transformable elements — keys into comp.xf.
 // Text boxes (comp.texts) are dynamic in number, so they use runtime keys of
 // the form `text:<id>` instead of a member of this union — see XfKey below.
+// How many colors a motif may be handed. The engines themselves take any
+// number; this is the guardrail on member input and hand-edited links.
+export const MAX_MOTIF_COLORS = 8;
+
 export const XF_KEYS = ["photo", "motif", "title", "date", "time", "sig"] as const;
 export type StaticXfKey = (typeof XF_KEYS)[number];
 export type XfKey = StaticXfKey | `text:${string}`;
@@ -114,7 +136,9 @@ export const ARRANGEMENTS: ArrangeVariant[] = [
   { motif: "tl", photo: "center" }, // off-center single: motif accents a corner, photo dominates
 ];
 
-export type ChipStyle = "ticket" | "scallop" | "line";
+// "plain" is the stripped chip: the words in their accent color with no
+// pill behind them and no rule beside them.
+export type ChipStyle = "ticket" | "scallop" | "line" | "plain";
 export type WordsLayout = "band" | "corners" | "stack";
 
 // A member text box — its own framed card, sized to its wrapped text. Replaces
@@ -175,6 +199,10 @@ export interface CompState {
   titleFrame: string; // frame shape id for the title's contrast plate
   titleFrameSeed: number;
   xf: Partial<Record<XfKey, XfState>>; // per-element free transform
+  // Art layers lifted to the top of the stack — "bring to front". Empty by
+  // default, which is the order the app always drew in, so an existing doc or
+  // share link is untouched until someone deliberately raises something.
+  front?: XfKey[];
   locks?: Partial<Record<LockKey, boolean>>; // shuffleComp() skips locked slots
   // A team-tuned palette (see the #palette tuner). Overrides the canon color
   // slots, which every ground, register and accent derives from — so this
@@ -212,9 +240,21 @@ export interface Doc {
 // Signature params: the network engine's, minus tiles — one mark, one corner.
 export const SIG_PARAMS = SIGNATURE_ENGINE.params.filter((p) => p.key !== "tiles");
 
+// The net's four styles (membrane / web / ridges / mix) are down to membrane
+// alone — the one the team kept. `style` deliberately stays in SIG_PARAMS so
+// sanitize() still carries it on docs that already chose another: culled from
+// the pickers, not from the renderer, so no saved piece or share link
+// repaints. SIG_UI_PARAMS is what the panels actually offer.
+export const SIG_STYLE_MEMBRANE = 0;
+export const SIG_UI_PARAMS = SIG_PARAMS.filter((p) => p.key !== "style");
+
 export function defaultSigParams(): Record<string, number> {
   // engine defaults, pulled in tighter — a signature is one held cluster
-  return { ...Object.fromEntries(SIG_PARAMS.map((p) => [p.key, p.default])), scatter: 0.55 };
+  return {
+    ...Object.fromEntries(SIG_PARAMS.map((p) => [p.key, p.default])),
+    scatter: 0.55,
+    style: SIG_STYLE_MEMBRANE,
+  };
 }
 
 export function newDoc(templateId: string): Doc {
@@ -343,6 +383,28 @@ export function docAccents(doc: Doc): string[] {
   return registers[doc.register].accents.filter((a) => a !== docGround(doc).hex);
 }
 
+// The subset of docAccents() indexes that are true accents — pink, green, sky
+// — as opposed to the base colors that can carry a composition on their own.
+// Shuffle draws from here so orange and indigo stop turning up as incidental
+// chip colors; the member can still pick them by hand from the full list.
+// Falls back to every index if a tuned palette leaves no accent-tier color.
+export function accentTierIndexes(doc: Doc): number[] {
+  const c = docColors(doc);
+  const wanted = new Set(ACCENT_KEYS.map((k) => c[k]));
+  const all = docAccents(doc);
+  const hits = all.map((hex, i) => (wanted.has(hex) ? i : -1)).filter((i) => i >= 0);
+  return hits.length ? hits : all.map((_, i) => i);
+}
+
+// The tier of the color at a docAccents() index — for pickers that want to
+// show the hierarchy.
+export function accentTierAt(doc: Doc, idx: number): ColorTier {
+  const c = docColors(doc);
+  const hex = docAccent(doc, idx);
+  const key = COLOR_KEYS.find((k) => c[k] === hex);
+  return key ? COLOR_TIER[key] : "accent";
+}
+
 // How many accent indexes are actually pickable for this doc (docAccent's own
 // modulus).
 function accentCount(doc: Doc): number {
@@ -420,11 +482,20 @@ export function shuffleComp(doc: Doc) {
       doc.comp.bgFade = BG_FADE.min + Math.random() * (BG_FADE.max - BG_FADE.min);
     } else doc.comp.bg = "";
   }
-  if (!locks.panelAccent) doc.comp.panelAccent = Math.floor(Math.random() * 4);
+  // The ground is rolled BEFORE the accents that sit on it: docAccents()
+  // excludes whatever the ground is, so picking accents first would draw them
+  // from the previous ground's list.
+  if (!locks.groundRegister) {
+    doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
+    doc.register = docGround(doc).register;
+  }
+  const accentPool = accentTierIndexes(doc);
+  const pickAccent = () => pick(accentPool);
+  if (!locks.panelAccent) doc.comp.panelAccent = pickAccent();
   if (!locks.signature) doc.comp.sig.seed = Math.floor(Math.random() * 100000);
   if (!locks.chips) {
-    doc.comp.chipAccents = [Math.floor(Math.random() * 4), Math.floor(Math.random() * 4)];
-    doc.comp.chipStyle = pick<ChipStyle>(["ticket", "scallop", "line"]);
+    doc.comp.chipAccents = [pickAccent(), pickAccent()];
+    doc.comp.chipStyle = pick<ChipStyle>(["ticket", "scallop", "line", "plain"]);
   }
   if (!locks.titlePlate) {
     doc.comp.titleFrame = pick(PLATE_FRAMES).id;
@@ -444,10 +515,6 @@ export function shuffleComp(doc: Doc) {
     delete xf.time;
   }
   doc.comp.xf = xf;
-  if (!locks.groundRegister) {
-    doc.ground = pick([0, 0, 0, 1, 2, 3, 7, 8]);
-    doc.register = docGround(doc).register;
-  }
   // a different motif engine each roll, params drawn from curated ranges
   if (!locks.motif) {
     doc.motif = {
@@ -517,7 +584,7 @@ export function sanitize(doc: Doc): Doc {
     Number.isFinite(ca?.[0]) ? Math.round(ca[0]) : 0,
     Number.isFinite(ca?.[1]) ? Math.round(ca[1]) : 2,
   ];
-  if (!["ticket", "scallop", "line"].includes(doc.comp.chipStyle)) doc.comp.chipStyle = "ticket";
+  if (!["ticket", "scallop", "line", "plain"].includes(doc.comp.chipStyle)) doc.comp.chipStyle = "ticket";
   if (!["band", "corners", "stack"].includes(doc.comp.words)) doc.comp.words = "band";
   doc.comp.arrange = Number.isFinite(doc.comp.arrange)
     ? ((Math.round(doc.comp.arrange) % ARRANGEMENTS.length) + ARRANGEMENTS.length) % ARRANGEMENTS.length
@@ -611,16 +678,28 @@ export function sanitize(doc: Doc): Doc {
   for (const k of validXfKeys) {
     const v = rawXf?.[k];
     if (!v || typeof v !== "object") continue;
-    const dx = Number(v.dx), dy = Number(v.dy), s = Number(v.s), rot = Number(v.rot);
-    if (![dx, dy, s, rot].some(Number.isFinite)) continue;
+    const dx = Number(v.dx), dy = Number(v.dy), rot = Number(v.rot);
+    // Legacy docs (and share links minted before per-axis scale) carry a single
+    // uniform `s`; read it as the default for both axes so an old piece still
+    // renders at exactly the size it was saved at.
+    const legacy = Number((v as { s?: unknown }).s);
+    const uniform = Number.isFinite(legacy) ? legacy : 1;
+    const sx = Number.isFinite(Number(v.sx)) ? Number(v.sx) : uniform;
+    const sy = Number.isFinite(Number(v.sy)) ? Number(v.sy) : uniform;
+    if (![dx, dy, sx, sy, rot].some(Number.isFinite)) continue;
     cleanXf[k] = {
       dx: Number.isFinite(dx) ? Math.max(-t.w, Math.min(t.w, dx)) : 0,
       dy: Number.isFinite(dy) ? Math.max(-t.h, Math.min(t.h, dy)) : 0,
-      s: Number.isFinite(s) ? Math.max(0.3, Math.min(3, s)) : 1,
+      sx: Math.max(0.3, Math.min(3, sx)),
+      sy: Math.max(0.3, Math.min(3, sy)),
       rot: Number.isFinite(rot) ? Math.max(-180, Math.min(180, rot)) : 0,
     };
   }
   doc.comp.xf = cleanXf;
+  const rawFront = (doc.comp as unknown as { front?: unknown }).front;
+  doc.comp.front = Array.isArray(rawFront)
+    ? [...new Set(rawFront.filter((k): k is XfKey => validXfKeys.includes(k as XfKey)))]
+    : [];
   doc.v = 2;
   // register follows the ground — text stays readable by construction
   doc.register = docGround(doc).register;
@@ -635,6 +714,15 @@ export function sanitize(doc: Doc): Doc {
       clean[p.key] = Number.isFinite(v) ? Math.min(p.max, Math.max(p.min, v)) : p.default;
     }
     doc.motif.params = clean;
+    // The motif color list is member-grown now, so bound it: whole numbers
+    // only (docAccent wraps them modulo the accent list), at least one, and a
+    // ceiling so a hand-edited share link can't ask for thousands of slots.
+    const rawSlots = Array.isArray(doc.motif.accents) ? doc.motif.accents : [];
+    const slots = rawSlots
+      .map((n) => Math.trunc(Number(n)))
+      .filter((n) => Number.isFinite(n))
+      .slice(0, MAX_MOTIF_COLORS);
+    doc.motif.accents = slots.length ? slots : [4, 0];
   }
   const { amplitude, periods, strokeWidth } = LINE_MOTIF;
   doc.line.amp = Math.min(amplitude.max, Math.max(amplitude.min, doc.line.amp));

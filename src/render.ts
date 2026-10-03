@@ -9,7 +9,7 @@ import { framePath, ticketPath, scallopChipPath, scallopChipProtrusion, frameAsp
 import { rng, smoothPath } from "./engines/util.js";
 import { markById } from "./marks/index";
 import { photoById, photoRegionLum } from "./photos/index";
-import { ARRANGEMENTS, docAccent, docColors, docGround, docSeason, docTemplate, textXfKey, type ChipStyle, type Doc, type TextBoxState, type XfKey, type XfState } from "./state";
+import { ARRANGEMENTS, docAccent, docColors, docGround, docSeason, docTemplate, textXfKey, xfIsIdentity, xfMeanScale, type ChipStyle, type Doc, type TextBoxState, type XfKey, type XfState } from "./state";
 import type { TextZone } from "./templates/index";
 
 const esc = (s: string) =>
@@ -131,8 +131,21 @@ function chipSvg(
   align: "start" | "end" = "end"
 ): { svg: string; w: number } {
   if (!text.trim()) return { svg: "", w: 0 };
-  const w = text.length * size * 0.56 + size * 1.7;
   const h = size * 1.75;
+  // "plain" drops the pill entirely: no shape to pad for, so the chip is only
+  // as wide as its words, and the accent colors the type instead of a fill
+  // behind it.
+  if (style === "plain") {
+    const pw = text.length * size * 0.56 + size * 0.3;
+    const px = align === "end" ? anchor - pw : anchor;
+    return {
+      svg: `<g transform="translate(${px.toFixed(1)} ${(cy - h / 2).toFixed(1)})">
+      <text x="${pw / 2}" y="${h / 2}" text-anchor="middle" dominant-baseline="central" fill="${accent}"
+        font-family="${fontFamilyCss("Figtree")}" font-size="${size}" font-weight="600">${esc(text)}</text></g>`,
+      w: pw,
+    };
+  }
+  const w = text.length * size * 0.56 + size * 1.7;
   const x = align === "end" ? anchor - w : anchor;
   const ink = isDark(accent) ? pair.light : pair.dark;
   const pathD = style === "scallop" ? scallopChipPath(seed, w, h) : ticketPath(seed, w, h);
@@ -279,7 +292,7 @@ function splitLineChipsSvg(
     ...(L.hasTime ? runDiscs(L.timeLeft, L.timeW) : []),
   ];
   const st = doc.comp.xf?.date;
-  const discs = localDiscs.map((d) => ({ ...xfPt(st, cx, cy, d.x, d.y), r: d.r * (st?.s ?? 1) }));
+  const discs = localDiscs.map((d) => ({ ...xfPt(st, cx, cy, d.x, d.y), r: d.r * xfMeanScale(st) }));
   const render = (ink: string) =>
     lineChipsSvg(dateText, timeText, dateAccent, timeAccent, anchor, cy, size, seed, ink, align).svg;
   const svg = splitInkSvg(doc, "date", cx, cy, discs, render, W, H, heroBottom);
@@ -352,10 +365,10 @@ function bgTextureSvg(doc: Doc, W: number, H: number): string {
 // find and measure it via getBBox(); identity when no xf is stored.
 function xfWrap(doc: Doc, key: XfKey, cx: number, cy: number, inner: string): string {
   const xf = doc.comp.xf?.[key];
-  const dx = xf?.dx ?? 0, dy = xf?.dy ?? 0, s = xf?.s ?? 1, rot = xf?.rot ?? 0;
+  const dx = xf?.dx ?? 0, dy = xf?.dy ?? 0, sx = xf?.sx ?? 1, sy = xf?.sy ?? 1, rot = xf?.rot ?? 0;
   const t =
-    dx || dy || s !== 1 || rot
-      ? ` transform="translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${rot.toFixed(2)}) scale(${s.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${dx.toFixed(2)} ${dy.toFixed(2)})"`
+    dx || dy || sx !== 1 || sy !== 1 || rot
+      ? ` transform="translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${rot.toFixed(2)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${dx.toFixed(2)} ${dy.toFixed(2)})"`
       : "";
   return `<g data-el="${key}"${t}>${inner}</g>`;
 }
@@ -602,20 +615,19 @@ function layoutWindow(
 function xfPt(t: XfState | undefined, cx: number, cy: number, x: number, y: number): { x: number; y: number } {
   if (!t) return { x, y };
   const rad = (t.rot * Math.PI) / 180;
-  const px = x - cx + t.dx, py = y - cy + t.dy;
+  const px = (x - cx + t.dx) * t.sx, py = (y - cy + t.dy) * t.sy;
   return {
-    x: cx + t.s * (px * Math.cos(rad) - py * Math.sin(rad)),
-    y: cy + t.s * (px * Math.sin(rad) + py * Math.cos(rad)),
+    x: cx + (px * Math.cos(rad) - py * Math.sin(rad)),
+    y: cy + (px * Math.sin(rad) + py * Math.cos(rad)),
   };
 }
 function xfPtInv(t: XfState | undefined, cx: number, cy: number, x: number, y: number): { x: number; y: number } {
   if (!t) return { x, y };
   const rad = (t.rot * Math.PI) / 180;
-  const px = (x - cx) / (t.s || 1), py = (y - cy) / (t.s || 1);
-  return {
-    x: cx + (px * Math.cos(rad) + py * Math.sin(rad)) - t.dx,
-    y: cy + (-px * Math.sin(rad) + py * Math.cos(rad)) - t.dy,
-  };
+  const ux = x - cx, uy = y - cy;
+  const px = (ux * Math.cos(rad) + uy * Math.sin(rad)) / (t.sx || 1);
+  const py = (-ux * Math.sin(rad) + uy * Math.cos(rad)) / (t.sy || 1);
+  return { x: cx + px - t.dx, y: cy + py - t.dy };
 }
 
 // The light/dark pair every "pick a readable ink for this surface" decision
@@ -659,13 +671,15 @@ function windowContentLum(
 // The forward xfWrap transform (and its inverse) as SVG transform lists —
 // the inverse lets a userSpace clip defined in canvas coords survive inside
 // a transformed element group.
-function xfAttr(t: { dx: number; dy: number; s: number; rot: number } | undefined, cx: number, cy: number): string {
-  if (!t || (!t.dx && !t.dy && t.s === 1 && !t.rot)) return "";
-  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${t.rot.toFixed(2)}) scale(${t.s.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${t.dx.toFixed(2)} ${t.dy.toFixed(2)})`;
+function xfAttr(t: XfState | undefined, cx: number, cy: number): string {
+  if (xfIsIdentity(t)) return "";
+  const u = t!;
+  return `translate(${cx.toFixed(2)} ${cy.toFixed(2)}) rotate(${u.rot.toFixed(2)}) scale(${u.sx.toFixed(4)} ${u.sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)}) translate(${u.dx.toFixed(2)} ${u.dy.toFixed(2)})`;
 }
-function xfInverseAttr(t: { dx: number; dy: number; s: number; rot: number } | undefined, cx: number, cy: number): string {
-  if (!t || (!t.dx && !t.dy && t.s === 1 && !t.rot)) return "";
-  return `translate(${(-t.dx).toFixed(2)} ${(-t.dy).toFixed(2)}) translate(${cx.toFixed(2)} ${cy.toFixed(2)}) scale(${(1 / (t.s || 1)).toFixed(6)}) rotate(${(-t.rot).toFixed(2)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`;
+function xfInverseAttr(t: XfState | undefined, cx: number, cy: number): string {
+  if (xfIsIdentity(t)) return "";
+  const u = t!;
+  return `translate(${(-u.dx).toFixed(2)} ${(-u.dy).toFixed(2)}) translate(${cx.toFixed(2)} ${cy.toFixed(2)}) scale(${(1 / (u.sx || 1)).toFixed(6)} ${(1 / (u.sy || 1)).toFixed(6)}) rotate(${(-u.rot).toFixed(2)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`;
 }
 
 // --- sampled-luminance ground truth ------------------------------------------
@@ -833,7 +847,7 @@ function splitInkSvg(
     let lum: number;
     if (sample) lum = sample(d.x, d.y, d.r);
     else if (inside && w0) {
-      const r0 = d.r / (pt?.s || 1);
+      const r0 = d.r / xfMeanScale(pt);
       lum = windowContentLum(doc, w0, { x: q.x - r0, y: q.y - r0, w: r0 * 2, h: r0 * 2 });
     } else lum = baseLumAt(doc, { x: d.x - d.r, y: d.y - d.r, w: d.r * 2, h: d.r * 2 }, W, H);
     if (inside) { inLum += lum; inN++; }
@@ -874,7 +888,7 @@ function splitSigSvg(
   const discs = netInk({ w: box.w, h: box.h, p: sigEngineParams(doc.comp.sig.params), seed: doc.comp.sig.seed })
     .map((d: { x: number; y: number; r: number }) => ({
       ...xfPt(st, cx, cy, box.x + d.x, box.y + d.y),
-      r: d.r * (st?.s ?? 1),
+      r: d.r * xfMeanScale(st),
     }));
   return splitInkSvg(doc, "sig", cx, cy, discs, (ink) => signatureSvg(doc, box.x, box.y, box.w, box.h, ink), W, H, heroBottom);
 }
@@ -1093,7 +1107,15 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
     const winX = m * 0.7, winY = heroTop, winW = W - m * 1.4, winH = heroBottom - heroTop;
     const win = xfWrap(doc, "photo", winX + winW / 2, winY + winH / 2,
       frameWindow(doc, winX, winY, winW, winH, comp.layout === "panel" ? "fill" : "photo"));
-    return bg + win + textsSvgOut + (artOnly ? "" : wordsSvg);
+    // These layouts carry no motif of their own. Raising the motif to the
+    // front is what asks for one — the point of "overlay motif over color
+    // block" — so it is drawn only then, leaving every existing doc as it was.
+    const motifOver =
+      doc.motif && (comp.front ?? []).includes("motif")
+        ? xfWrap(doc, "motif", winX + winW / 2, winY + winH / 2,
+            motifWindowSvg(doc, { x: winX, y: winY, w: winW, h: winH }))
+        : "";
+    return bg + win + motifOver + textsSvgOut + (artOnly ? "" : wordsSvg);
   }
 
   const mp = m * 0.45; // motif padding off the canvas edge
@@ -1115,8 +1137,23 @@ function composedSvg(doc: Doc, W: number, H: number, artOnly = false): string {
   // the sculpt cutout is a hero object, not backdrop texture — it must always
   // read as sitting ON the photo, never tucked behind it
   const sculptOnTop = doc.motif?.engine === "sculpt";
-  const layered = sculptOnTop ? photoLayer + motifLayer : motifLayer + photoLayer;
-  return bg + layered + textsSvgOut + (artOnly ? "" : wordsSvg);
+  const base: { key: XfKey; svg: string }[] = sculptOnTop
+    ? [{ key: "photo", svg: photoLayer }, { key: "motif", svg: motifLayer }]
+    : [{ key: "motif", svg: motifLayer }, { key: "photo", svg: photoLayer }];
+  return bg + stackArt(doc, base) + textsSvgOut + (artOnly ? "" : wordsSvg);
+}
+
+// Art layers draw in build order; anything named in comp.front is lifted to
+// the end of the list. Array.sort is stable, so layers that are neither
+// raised nor lowered keep exactly the order they were built in — which is why
+// a doc with an empty `front` renders byte-for-byte as it always did.
+function stackArt(doc: Doc, layers: { key: XfKey; svg: string }[]): string {
+  const front = doc.comp.front ?? [];
+  if (!front.length) return layers.map((l) => l.svg).join("");
+  return [...layers]
+    .sort((a, b) => Number(front.includes(a.key)) - Number(front.includes(b.key)))
+    .map((l) => l.svg)
+    .join("");
 }
 
 // --- diagram kit -------------------------------------------------------------

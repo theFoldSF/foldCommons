@@ -39,6 +39,7 @@ export const COLOR = {
 
 export const CANON_COLORS: Swatch[] = Object.values(COLOR);
 
+
 // ---------------------------------------------------------------------------
 // Palettes — a team-tuned override of the canon slots above. Everything the
 // app colors in resolves from these ten names, so overriding them retints the
@@ -51,6 +52,49 @@ export type ColorKey = keyof typeof COLOR;
 export type Palette = Partial<Record<ColorKey, string>>;
 
 export const COLOR_KEYS = Object.keys(COLOR) as ColorKey[];
+
+// ---------------------------------------------------------------------------
+// Tiers — the deck's color list read as a hierarchy rather than ten equal
+// slots. Orange and blueprint ("indigo") are BASE colors: either can carry a
+// whole composition on its own. Pink, green and sky are ACCENTS: they
+// punctuate one. The creams are quiet grounds, and ink is ink.
+//
+// The tool used to treat all six non-cream colors as one undifferentiated
+// accent pool, which is why orange and indigo kept turning up as incidental
+// chip colors instead of reading as the base of a piece.
+// ---------------------------------------------------------------------------
+
+export type ColorTier = "ground" | "base" | "accent" | "ink";
+
+export const COLOR_TIER: Record<ColorKey, ColorTier> = {
+  cream: "ground",
+  cream2: "ground",
+  warmGray: "ground",
+  coolGray: "ground",
+  orange: "base",
+  blueprint: "base",
+  pink: "accent",
+  green: "accent",
+  sky: "accent",
+  ink: "ink",
+};
+
+export const BASE_KEYS: ColorKey[] = COLOR_KEYS.filter((k) => COLOR_TIER[k] === "base");
+export const ACCENT_KEYS: ColorKey[] = COLOR_KEYS.filter((k) => COLOR_TIER[k] === "accent");
+
+// Sort order for any picker that wants the hierarchy visible: base first,
+// then accents, then the quiet grounds, ink last. This is a DISPLAY order
+// only — never the order of GROUND_SPECS itself, which doc.ground indexes
+// into, so reordering it would silently repaint every saved piece.
+const TIER_RANK: Record<ColorTier, number> = { base: 0, accent: 1, ground: 2, ink: 3 };
+export const tierRank = (t: ColorTier): number => TIER_RANK[t];
+
+export const TIER_LABEL: Record<ColorTier, string> = {
+  base: "base color",
+  accent: "accent",
+  ground: "ground",
+  ink: "ink",
+};
 
 export type ColorMap = Record<ColorKey, string>;
 
@@ -118,6 +162,7 @@ export const REGISTERS: Record<RegisterKey, Register> = buildRegisters(CANON_COL
 // ---------------------------------------------------------------------------
 
 export interface Ground {
+  tier: ColorTier;
   key: string;
   label: string;
   hex: string;
@@ -146,6 +191,7 @@ export function buildGrounds(c: ColorMap): Ground[] {
     hex: c[key],
     ink: c[ink],
     register,
+    tier: COLOR_TIER[key],
   }));
 }
 

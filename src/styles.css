@@ -88,6 +88,24 @@ body {
 }
 #leftPanel { border-right: 1px solid var(--rule); }
 #rightPanel { border-left: 1px solid var(--rule); width: 330px; }
+
+/* Half-screen work. The two panels are fixed-width and don't shrink, so on a
+   window around 700px wide they used to leave the stage about 90px — the
+   artifact, which is the entire point, became the smallest thing on screen.
+   Narrow them first, then let either one be hidden outright. */
+@media (max-width: 1180px) {
+  #leftPanel { width: 236px; padding: 14px; }
+  #rightPanel { width: 258px; padding: 14px; }
+  #stage { padding: 16px; }
+}
+@media (max-width: 900px) {
+  #leftPanel { width: 208px; padding: 12px; }
+  #rightPanel { width: 224px; padding: 12px; }
+  #stage { padding: 10px; }
+}
+#makeView.no-left #leftPanel,
+#makeView.no-right #rightPanel { display: none; }
+#topbar .panes button.off { opacity: 1; background: var(--ink); color: var(--cream); }
 /* the stage is quiet: the artifact floats on plain grey, nothing else */
 #stage {
   flex: 1;
@@ -430,6 +448,11 @@ button.mini:hover { border-color: var(--ink); }
   vector-effect: non-scaling-stroke;
   cursor: nwse-resize;
 }
+/* Edge handles stretch one axis — filled solid so they read as a different
+   tool from the hollow corner handles, which keep the aspect locked. */
+#canvasWrap svg .xf-edge { fill: var(--blueprint); }
+#canvasWrap svg .xf-edge-x { cursor: ew-resize; }
+#canvasWrap svg .xf-edge-y { cursor: ns-resize; }
 #canvasWrap svg .xf-rotline {
   stroke: var(--blueprint);
   stroke-width: 1.2;
@@ -633,6 +656,19 @@ button.mini:hover { border-color: var(--ink); }
 @media (max-width: 560px) {
   .pal-meta-row { grid-template-columns: 1fr; gap: 0; }
 }
+
+/* Color hierarchy, made visible. The base colors (orange, indigo) lead every
+   chip row and are drawn largest; accents sit at normal size; the quiet papers
+   and ink trail smaller. Same treatment in the Ground picker and in any accent
+   row, so the hierarchy reads the same way wherever colors are offered. */
+.chips { align-items: center; }
+.chips .chip.tier-base { width: 31px; height: 31px; }
+.chips .chip.tier-ground,
+.chips .chip.tier-ink { width: 21px; height: 21px; }
+
+/* Motif color slots — the +/- sit on the label row, each chip row below. */
+.slot-ctl { gap: 4px; flex: none; }
+.slot-row + .slot-row { margin-top: 5px; }
 
 .pal-slots {
   display: grid;
